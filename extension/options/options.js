@@ -4,6 +4,10 @@ const countEl = document.getElementById("count");
 const emptyEl = document.getElementById("empty");
 const tableEl = document.getElementById("recordingsTable");
 const bodyEl = document.getElementById("recordingsBody");
+const viewPanel = document.getElementById("viewPanel");
+const viewTitle = document.getElementById("viewTitle");
+const viewMeta = document.getElementById("viewMeta");
+const recVideo = document.getElementById("recVideo");
 const inferenceView = document.getElementById("inferenceView");
 const inferenceEmpty = document.getElementById("inferenceEmpty");
 const inferenceMeta = document.getElementById("inferenceMeta");
@@ -42,8 +46,8 @@ function render() {
       <td>${duration}</td>
       <td>${r.event_count}</td>
       <td><span class="inference-badge ${hasInf}">${hasInf === "yes" ? "✓" : "—"}</span></td>
+      <td><button class="btn-small" onclick="app.playRecording('${r.id}')">Play</button></td>
       <td>
-        <button class="btn-small btn-primary" onclick="app.openRecording('${r.id}')">View</button>
         <button class="btn-small btn-danger" onclick="app.deleteRecording('${r.id}')">Delete</button>
       </td>
     `;
@@ -51,18 +55,37 @@ function render() {
   }
 }
 
-async function openRecording(id) {
+async function playRecording(id) {
   selectedId = id;
   try {
     const res = await fetch(`${BACKEND_ORIGIN}/api/extension/recordings/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rec = await res.json();
-    // show video link
-    // inference
-    showInference(id);
+
+    viewTitle.textContent = `Recording · ${new Date(rec.start_time * 1000).toLocaleString()}`;
+    viewMeta.innerHTML = `
+      Duration: <b>${(rec.duration_ms / 1000).toFixed(1)}s</b> &middot;
+      Events: <b>${rec.event_count}</b> &middot;
+      Extension: <b>${rec.extension_id || "—"}</b>
+    `;
+    recVideo.src = `${BACKEND_ORIGIN}/api/extension/recordings/${id}/video`;
+
+    viewPanel.style.display = "block";
+
+    await showInference(id);
   } catch (err) {
     console.error("options: failed to open recording", err);
+    alert("Failed to load recording.");
   }
+}
+
+function closeView() {
+  viewPanel.style.display = "none";
+  recVideo.src = "";
+  recVideo.pause();
+  selectedId = null;
+  inferenceView.style.display = "none";
+  inferenceEmpty.style.display = "none";
 }
 
 async function showInference(id) {
@@ -91,11 +114,7 @@ async function deleteRecording(id) {
   try {
     const res = await fetch(`${BACKEND_ORIGIN}/api/extension/recordings/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    if (selectedId === id) {
-      selectedId = null;
-      inferenceView.style.display = "none";
-      inferenceEmpty.style.display = "block";
-    }
+    if (selectedId === id) closeView();
     await fetchRecordings();
   } catch (err) {
     console.error("options: failed to delete recording", err);
@@ -103,6 +122,6 @@ async function deleteRecording(id) {
   }
 }
 
-window.app = { openRecording, deleteRecording };
+window.app = { playRecording, closeView, deleteRecording };
 
 fetchRecordings();

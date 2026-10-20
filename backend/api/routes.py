@@ -49,6 +49,8 @@ def _route(method: str, path: str) -> Optional[Tuple[str, Dict[str, str]]]:
         return ("list_recordings", {})
     if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "recordings"]:
         return ("get_recording", {"id": parts[3]})
+    if method == "GET" and len(parts) == 5 and parts[:3] == ["api", "extension", "recordings"] and parts[4] == "video":
+        return ("get_video", {"id": parts[3]})
     if method == "DELETE" and len(parts) == 4 and parts[:3] == ["api", "extension", "recordings"]:
         return ("delete_recording", {"id": parts[3]})
     if method == "POST" and len(parts) == 4 and parts[:3] == ["api", "extension", "infer"]:
@@ -133,6 +135,24 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
                 _json(handler, 404, {"error": "recording not found"})
                 return
             _json(handler, 200, entry)
+            return
+
+        if name == "get_video":
+            entry = get_recording(params["id"])
+            if not entry:
+                _json(handler, 404, {"error": "recording not found"})
+                return
+            video_path = entry.get("video_path", "")
+            if not video_path or not os.path.exists(video_path):
+                _json(handler, 404, {"error": "video file not found"})
+                return
+            data = open(video_path, "rb").read()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "video/webm")
+            handler.send_header("Content-Length", str(len(data)))
+            handler.send_header("Access-Control-Allow-Origin", "*")
+            handler.end_headers()
+            handler.wfile.write(data)
             return
 
         if name == "delete_recording":

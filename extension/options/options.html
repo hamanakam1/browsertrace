@@ -22,7 +22,7 @@
     <table id="recordingsTable" style="display:none">
       <thead>
         <tr>
-          <th>Started</th><th>Duration</th><th>Events</th><th>Inference</th><th>Actions</th>
+          <th>Started</th><th>Duration</th><th>Events</th><th>Inference</th><th>Video</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="recordingsBody"></tbody>
@@ -31,13 +31,21 @@
 
   <div class="card">
     <div class="card-header">
-      <h2>Inference Result</h2>
+      <h2 id="viewTitle">Recording</h2>
     </div>
-    <div id="inferenceView" style="display:none">
-      <div id="inferenceMeta"></div>
+    <div id="viewPanel" style="display:none">
+      <div class="video-wrap">
+        <video id="recVideo" controls preload="metadata" style="max-width:100%; max-height:400px; background:#000;"></video>
+      </div>
+      <div id="viewMeta" style="margin-top:10px; font-size:12px; color:#6b7280;"></div>
+      <button class="btn btn-primary" onclick="app.closeView()">Close</button>
+    </div>
+    <div id="inferenceView" style="margin-top:16px; display:none">
+      <h3 style="font-size:14px; margin:0 0 8px 0;">Inference</h3>
+      <div id="inferenceMeta" style="font-size:12px; color:#6b7280; margin-bottom:8px;"></div>
       <pre id="inferenceBody"></pre>
     </div>
-    <div id="inferenceEmpty" class="empty">Select a recording with inference to view results.</div>
+    <div id="inferenceEmpty" class="empty" style="margin-top:16px;">No inference result yet. Run inference from the extension or backend.</div>
   </div>
 
   <div class="footer">

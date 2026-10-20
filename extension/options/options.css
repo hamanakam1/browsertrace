@@ -31,3 +31,10 @@ tr:hover { background: #f9fafb; }
 #inferenceMeta { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
 
 .footer { font-size: 11px; color: #9ca3af; margin-top: 24px; text-align: center; }
+
+.video-wrap { margin: 12px 0; border: 1px solid #e5e7eb; border-radius: 6px; background: #000; padding: 4px; }
+#viewPanel { animation: fadeIn 0.15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+#inferenceBody { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, monospace; color: #334155; max-height: 400px; overflow: auto; }
+#inferenceMeta { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
