@@ -146,13 +146,7 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
             if not video_path or not os.path.exists(video_path):
                 _json(handler, 404, {"error": "video file not found"})
                 return
-            data = open(video_path, "rb").read()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "video/webm")
-            handler.send_header("Content-Length", str(len(data)))
-            handler.send_header("Access-Control-Allow-Origin", "*")
-            handler.end_headers()
-            handler.wfile.write(data)
+            _serve_range(handler, video_path, "video/webm")
             return
 
         if name == "delete_recording":
@@ -247,3 +241,61 @@ def _parse_multipart(handler: BaseHTTPRequestHandler) -> Tuple[Dict[str, str], D
             files[name] = data
 
     return fields, files
+
+
+def _parse_range(range_header: str, file_size: int):
+    """Parse a Range header like 'bytes=0-499' into (start, end) inclusive."""
+    if not range_header or not range_header.lower().startswith("bytes="):
+        return None
+    spec = range_header[6:]
+    if "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    start = int(start_s) if start_s else None
+    end = int(end_s) if end_s else None
+    if start is None and end is not None:
+        # suffix range: bytes=-500 -> last 500 bytes
+        start = max(0, file_size - end)
+        end = file_size - 1
+    elif start is not None and end is None:
+        end = file_size - 1
+    elif start is not None and end is not None:
+        end = min(end, file_size - 1)
+    else:
+        return None
+    if start is None or start > file_size - 1 or start > end:
+        return None
+    return start, end
+
+
+def _serve_range(handler: BaseHTTPRequestHandler, path: str, content_type: str) -> None:
+    """Serve a file with HTTP range request support (for video seeking)."""
+    file_size = os.path.getsize(path)
+    range_header = handler.headers.get("Range")
+
+    start = 0
+    end = file_size - 1
+    status = 200
+    content_range = None
+
+    if range_header:
+        parsed = _parse_range(range_header, file_size)
+        if parsed:
+            start, end = parsed
+            status = 206
+            content_range = f"bytes {start}-{end}/{file_size}"
+
+    length = end - start + 1
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read(length)
+
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("Content-Length", str(length))
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    if content_range:
+        handler.send_header("Content-Range", content_range)
+    handler.end_headers()
+    handler.wfile.write(data)
