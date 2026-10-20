@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Dashboard Intelligence extension backend.
+# Start the browsertrace extension backend.
 # Listens on http://127.0.0.1:7890 by default (override with EXTENSION_BACKEND_PORT).
 set -euo pipefail
 

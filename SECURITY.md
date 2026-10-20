@@ -21,7 +21,7 @@ If you discover a security vulnerability, please report it responsibly:
 browsertrace is designed around these security boundaries:
 
 * **Opt-in capture** — recording never starts without explicit user consent
-* **Dashboard-scoped** — only the dashboard tab is captured; never arbitrary websites
+* **Targeted capture** — only pages you configure in the manifest are captured
 * **Secret redaction** — password/token/credential fields are scrubbed before storage
 * **Local-first** — recordings and inference stay on the operator's machine
 * **Visible indicator** — a persistent badge shows while recording

@@ -1,4 +1,4 @@
-# Standalone backend for Dashboard Intelligence extension
+# Standalone backend for browsertrace extension
 # Copies recordings + inference results here (outside repo, live data)
 
 ~/.browsertrace/

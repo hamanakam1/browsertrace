@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Dashboard Intelligence",
+  "name": "browsertrace",
   "version": "1.0.0",
-  "description": "Observes dashboard usage with explicit consent and runs local inference on the recording.",
+  "description": "Record page usage with consent and run local inference to learn from your own browsing.",
   "minimum_chrome_version": "109",
 
   "permissions": [
@@ -12,7 +12,7 @@
   ],
 
   "host_permissions": [
-    "http://127.0.0.1:7878/*",
+    "https://example.com/*",
     "http://127.0.0.1:7890/*"
   ],
 
@@ -23,7 +23,7 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Dashboard Intelligence",
+    "default_title": "browsertrace",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
@@ -33,7 +33,7 @@
 
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1:7878/*"],
+      "matches": ["https://example.com/*"],
       "js": ["content/content.js"],
       "css": ["content/content.css"],
       "run_at": "document_idle"
@@ -55,7 +55,7 @@
   "web_accessible_resources": [
     {
       "resources": ["offscreen/offscreen.html"],
-      "matches": ["http://127.0.0.1:7878/*"]
+      "matches": ["https://example.com/*"]
     }
   ],
 

@@ -1,6 +1,6 @@
 # Contributing to browsertrace
 
-Thank you for considering a contribution! browsertrace is an open-source browser extension that observes dashboard usage with explicit consent and runs local inference on recordings. We welcome improvements of all sizes.
+Thank you for considering a contribution! browsertrace is an open-source browser extension that observes page usage with explicit consent and runs local inference on recordings. We welcome improvements of all sizes.
 
 ## How to contribute
 

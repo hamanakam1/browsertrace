@@ -8,4 +8,4 @@
 
 # browsertrace
 
-Observe dashboard usage, trace interactions, infer insights — all locally, all with consent.
+Observe page usage, trace interactions, infer insights — all locally, all with consent.

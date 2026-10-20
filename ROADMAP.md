@@ -1,9 +1,9 @@
-# Roadmap — Dashboard Intelligence Extension
+# Roadmap — browsertrace
 
 ## Phase 1 — Edge MVP (complete)
 - [x] Manifest V3 extension for Microsoft Edge
 - [x] Opt-in consent gate (default off)
-- [x] Dashboard-tab-scoped video capture via `tabCapture`
+- [x] Page-tab-scoped video capture via `tabCapture`
 - [x] Click / keyboard / change / submit interaction capture
 - [x] Secret/credential redaction (extension + backend)
 - [x] Visible recording indicator badge
@@ -43,7 +43,7 @@
 
 ## Design principles (never change)
 1. **Opt-in only.** Recording is off by default; explicit consent per session.
-2. **Dashboard-scoped.** Capture only the dashboard tab; never arbitrary sites; never full desktop by default.
+2. **Page-scoped.** Capture only pages you configure; never arbitrary sites; never full desktop by default.
 3. **Local-first.** Recordings and inference stay on the operator's machine.
 4. **No secrets.** Password/credential fields are redacted before storage.
 5. **Visible indicator.** A persistent badge shows while recording.

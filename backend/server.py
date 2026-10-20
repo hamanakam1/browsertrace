@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Standalone backend for the Dashboard Intelligence extension.
+"""Standalone backend for the browsertrace extension.
 
 Stores recordings under ~/.browsertrace/ and runs local inference
-via Ollama (http://127.0.0.1:11434/v1). Defaults to :7879 to avoid clashing
-with the ai-dashboard on :7878.
+via Ollama (http://127.0.0.1:11434/v1). Defaults to :7890.
 """
 
 from __future__ import annotations

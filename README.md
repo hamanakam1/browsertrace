@@ -2,9 +2,9 @@
 
 ![browsertrace logo](assets/logo/browsertrace.svg)
 
-> Observe dashboard usage, trace interactions, infer insights — all locally, all with consent.
+> Observe page usage, trace interactions, infer insights — all locally, all with consent.
 
-**[browsertrace](https://github.com/hamanakam1/browsertrace)** is a Manifest V3 browser extension that records video of dashboard usage and click/interactions with explicit user consent, then runs local inference to surface how a dashboard is actually being used.
+**browsertrace** is a Manifest V3 browser extension that records page usage with consent and runs local inference to help you learn from your own browsing. Works on any page you choose to target.
 
 Built first for **Microsoft Edge**, with **Chrome** and **Firefox** variants ready. Storage and inference stay on the operator's machine — nothing leaves unless you choose to export.
 
@@ -38,7 +38,7 @@ The mark is a single continuous line forming both an **eye** (observe) and a **c
 ## What it does
 
 1. **Opt-in recording** — Consent is required before anything is captured. Default is off.
-2. **Dashboard-scoped capture** — Records only the dashboard tab via `tabCapture`. Never arbitrary sites, never full desktop by default.
+2. **Page-scoped capture** — Records only pages you configure in the manifest. Never arbitrary sites, never full desktop by default.
 3. **Interaction tracing** — Captures click / keydown / change / submit events with target, coordinates, and timestamp.
 4. **Secret redaction** — Password / token / credential-named fields are scrubbed before storage (extension + backend).
 5. **Local inference** — Sampled frames are sent to a local Ollama instance; a narrative analysis of the session is generated.
@@ -103,9 +103,9 @@ launchctl load ~/Library/LaunchAgents/com.michaelhamanaka.browsertrace-backend.p
 
 ### 3. Record
 
-1. Open `http://127.0.0.1:7878` (your dashboard)
+1. Open any page you've added to `host_permissions` in the manifest
 2. Click the extension icon → enable consent → **Start Recording**
-3. Do some dashboard interactions
+3. Browse and interact normally
 4. Click **Stop Recording**
 5. Open **Extension options** → view video + inference results
 
@@ -123,7 +123,7 @@ deno test tests/redaction_test.mjs
 | Rule | Enforcement |
 |---|---|
 | **Opt-in only** | Recording is off by default; explicit consent per session |
-| **Dashboard-scoped** | `tabCapture` limited to the dashboard tab; no arbitrary sites |
+| **Page-scoped** | `tabCapture` limited to pages you configure; no arbitrary sites |
 | **Visible indicator** | Persistent badge while recording; browser tab indicator enforced |
 | **No secrets** | Password/token/credential fields redacted before storage |
 | **Local-first** | Everything stays under `~/.browsertrace/` unless you export |
@@ -153,4 +153,4 @@ See [`SECURITY.md`](SECURITY.md) for vulnerability reporting.
 
 ---
 
-Made for observing dashboard usage — transparently, locally, and with consent.
+Made for observing page usage — transparently, locally, and with consent.

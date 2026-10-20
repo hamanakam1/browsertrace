@@ -89,9 +89,9 @@ def _ollama_chat(frames: List[str], events_summary: str) -> str:
         {
             "role": "system",
             "content": (
-                "You are an AI assistant analyzing a dashboard usage recording. "
+                "You are an AI assistant analyzing a page usage recording. "
                 "You receive sampled video frames (base64 JPEG) and a list of click/interaction "
-                "events with timestamps. Describe what the user did, which dashboard areas they "
+                "events with timestamps. Describe what the user did, which page areas they "
                 "touched, any patterns or friction, and suggest improvements. Be concise."
             ),
         },

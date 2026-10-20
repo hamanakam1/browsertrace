@@ -7,7 +7,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/opt/homebrew/bin/python3</string>
-		<string>/Users/michaelhamanaka/Projects/dashboard-extension/backend/server.py</string>
+		<string>backend/server.py</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

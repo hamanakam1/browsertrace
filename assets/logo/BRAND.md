@@ -3,9 +3,9 @@
 ## Identity
 - **Name:** browsertrace (one word, lowercase)
 - **Pronunciation:** browse-trace
-- **Meaning:** browser + trace — records and traces browser/dashboard usage
+- **Meaning:** browser + trace — records and traces browser/page usage
 - **Tagline:** Observe. Trace. Understand.
-- **Descriptor:** Local-first dashboard usage tracing extension
+- **Descriptor:** Local-first page usage tracing extension
 
 ## Colors
 
