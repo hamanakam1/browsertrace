@@ -1,8 +1,6 @@
-# dashboard-extension
+# browsertrace
 
 Standalone browser extension (Manifest V3) that observes dashboard usage and acts on that intelligence. Built first for Microsoft Edge, with Chrome, Firefox, and Safari targets planned.
-
-The extension records, with explicit user consent, the video of the dashboard tab and the clicks/interactions within it, then runs inference against a local inference fleet to surface insights about how the dashboard is being used.
 
 ## What it does
 
@@ -31,7 +29,7 @@ Standalone backend (Python, :7890)
   ├── POST   /api/extension/infer/:id     — run Ollama inference
   └── GET    /api/extension/infer/:id     — get inference result
 
-Storage: `~/.dashboard-extension/{recordings,events,inference,consent.log,manifest.json}` (outside the repo, owner-only permissions).
+Storage: `~/.browsertrace/{recordings,events,inference,consent.log,manifest.json}` (outside the repo, owner-only permissions).
 
 ## Browser targets
 
@@ -50,9 +48,9 @@ cd ~/Projects/dashboard-extension/backend
 ./start.sh              # or: python3 server.py   # :7890
 
 # 2. (Optional) Install as a launchd service
-cp backend/launchd/com.michaelhamanaka.dashboard-extension-backend.plist \
+cp backend/launchd/com.michaelhamanaka.browsertrace-backend.plist \
    ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.michaelhamanaka.dashboard-extension-backend.plist
+launchctl load ~/Library/LaunchAgents/com.michaelhamanaka.browsertrace-backend.plist
 
 # 3. Load the unpacked extension in Edge
 # edge://extensions/ → Developer mode → Load unpacked → select extension/
@@ -102,7 +100,7 @@ tests/
 2. Recording is scoped to the dashboard tab only (`http://127.0.0.1:7878/*`).
 3. A visible badge/icon shows while recording; the browser enforces a tab indicator.
 4. Password/secret/credential-named fields are redacted before storage.
-5. Recordings and inference stay on the operator's machine under `~/.dashboard-extension/`.
+5. Recordings and inference stay on the operator's machine under `~/.browsertrace/`.
 6. Every start/stop is written to a consent audit log.
 7. Recordings carry a 30-day TTL; the user can delete any recording at any time.
 

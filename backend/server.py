@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Standalone backend for the Dashboard Intelligence extension.
 
-Stores recordings under ~/.dashboard-extension/ and runs local inference
+Stores recordings under ~/.browsertrace/ and runs local inference
 via Ollama (http://127.0.0.1:11434/v1). Defaults to :7879 to avoid clashing
 with the ai-dashboard on :7878.
 """

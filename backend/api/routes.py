@@ -74,7 +74,7 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
 
     try:
         if name == "health":
-            _json(handler, 200, {"status": "ok", "service": "dashboard-extension-backend"})
+            _json(handler, 200, {"status": "ok", "service": "browsertrace-backend"})
             return
 
         if name == "record":
@@ -100,7 +100,7 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
             extension_id = fields.get("extensionId", "unknown")
 
             # write video + events to disk
-            rec_dir = os.path.join(os.path.expanduser("~"), ".dashboard-extension", "recordings")
+            rec_dir = os.path.join(os.path.expanduser("~"), ".browsertrace", "recordings")
             os.makedirs(rec_dir, exist_ok=True)
             rec_id = uuid.uuid4().hex
             video_name = f"{rec_id}.webm"

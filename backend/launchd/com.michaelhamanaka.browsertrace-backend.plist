@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.michaelhamanaka.dashboard-extension-backend</string>
+	<string>com.michaelhamanaka.browsertrace-backend</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/opt/homebrew/bin/python3</string>
@@ -14,9 +14,9 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/Users/michaelhamanaka/.ai-dashboard/extension-backend.log</string>
+	<string>/Users/michaelhamanaka/.ai-dashboard/browsertrace-backend.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/michaelhamanaka/.ai-dashboard/extension-backend-error.log</string>
+	<string>/Users/michaelhamanaka/.ai-dashboard/browsertrace-backend-error.log</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>EXTENSION_BACKEND_PORT</key>

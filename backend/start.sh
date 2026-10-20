@@ -11,5 +11,5 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 PORT="${EXTENSION_BACKEND_PORT:-7890}"
-echo "Starting dashboard-extension backend on http://127.0.0.1:${PORT}"
+echo "Starting browsertrace backend on http://127.0.0.1:${PORT}"
 exec python3 server.py

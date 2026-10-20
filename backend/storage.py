@@ -1,4 +1,4 @@
-"""File-backed storage for extension recordings under ~/.dashboard-extension/."""
+"""File-backed storage for extension recordings under ~/.browsertrace/."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 HOME = Path.home()
-ROOT = HOME / ".dashboard-extension"
+ROOT = HOME / ".browsertrace"
 RECORDINGS_DIR = ROOT / "recordings"
 EVENTS_DIR = ROOT / "events"
 INFERENCE_DIR = ROOT / "inference"

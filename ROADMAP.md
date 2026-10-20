@@ -24,7 +24,7 @@
 - [x] HTTP Range request support for video seeking (206 Partial Content)
 - [x] Play video in options page player
 - [x] Backend health check + startup script (`backend/start.sh`)
-- [x] Launchd service plist for production (`com.michaelhamanaka.dashboard-extension-backend`)
+- [x] Launchd service plist for production (`com.michaelhamanaka.browsertrace-backend`)
 - [x] Backend-unavailable banner in popup, record disabled when down
 
 ## Phase 4 — Cross-browser (complete)
