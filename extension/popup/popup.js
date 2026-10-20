@@ -1,4 +1,4 @@
-import { DASHBOARD_ORIGIN, RECORD_API } from "../shared/constants.js";
+import { DASHBOARD_ORIGIN, RECORD_API, BACKEND_ORIGIN } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
 import { getState, setState } from "../shared/storage.js";
 
@@ -14,20 +14,36 @@ const recordBtn = document.getElementById("recordBtn");
 const stopBtn = document.getElementById("stopBtn");
 const metaEl = document.getElementById("meta");
 const logEl = document.getElementById("log");
+const backendBanner = document.getElementById("backendBanner");
 
 let enabled = false;
 let recording = false;
+let backendOk = false;
 
 function setStatus(s) {
   statusEl.textContent = s;
   statusEl.className = "status" + (s === STATUS.RECORDING ? " recording" : "");
-  recordBtn.disabled = !enabled || recording;
+  recordBtn.disabled = !enabled || recording || !backendOk;
   stopBtn.disabled = !enabled || !recording;
   stopBtn.style.display = recording ? "inline-block" : "none";
   recordBtn.style.display = recording ? "none" : "inline-block";
 }
 
+async function checkBackend() {
+  try {
+    const res = await fetch(`${BACKEND_ORIGIN}/api/extension/health`, { signal: AbortSignal.timeout(3000) });
+    backendOk = res.ok;
+  } catch (_) {
+    backendOk = false;
+  }
+  if (backendBanner) {
+    backendBanner.style.display = backendOk ? "none" : "block";
+  }
+  setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
+}
+
 async function refresh() {
+  await checkBackend();
   const state = await getState();
   enabled = !!state.enabled;
   recording = !!state.recording;

@@ -21,3 +21,7 @@
 .log-entry { margin: 4px 0; white-space: pre-wrap; word-break: break-all; }
 
 .footer { font-size: 11px; color: #9ca3af; margin-top: 8px; text-align: center; }
+
+.banner { padding: 6px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.banner.warn { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.banner code { font-size: 11px; background: #fff; padding: 1px 4px; border-radius: 3px; color: #92400e; }
