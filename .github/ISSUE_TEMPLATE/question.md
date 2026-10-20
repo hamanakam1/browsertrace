@@ -1,5 +1,5 @@
 name: Question
-about: Ask a question about browsertrace
+about: Ask a question about panther-intent-capture
 title: "[QUESTION] "
 labels: ["question"]
 assignees: ""

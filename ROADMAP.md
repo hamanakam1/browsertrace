@@ -1,4 +1,4 @@
-# Roadmap — browsertrace
+# Roadmap — panther-intent-capture
 
 ## Phase 1 — Edge MVP (complete)
 - [x] Manifest V3 extension for Microsoft Edge
@@ -19,27 +19,23 @@
 - [x] Inference results stored and retrievable via `GET /api/extension/infer/:id`
 - [x] 30-day TTL + cap on stored recordings
 
-## Phase 3 — Polish (complete)
-- [x] Serve video files from backend (`GET /api/extension/recordings/:id/video`)
-- [x] HTTP Range request support for video seeking (206 Partial Content)
-- [x] Play video in options page player
-- [x] Backend health check + startup script (`backend/start.sh`)
-- [x] Launchd service plist for production (`com.michaelhamanaka.browsertrace-backend`)
-- [x] Backend-unavailable banner in popup, record disabled when down
+## Phase 3 — Intent decomposition → tickets (in progress)
+- [ ] Decompose recorded session into named intents (goals)
+- [ ] Generate a ticket per intent: description, steps to reproduce, owner
+- [ ] Attach screenshots captured at decision points to each ticket
+- [ ] Emit tickets in a structured format coding agents can consume
+- [ ] Audio capture alongside video (planned)
 
-## Phase 4 — Cross-browser (complete)
-- [x] Google Chrome (Manifest V3) — `manifest.chrome.json`
-- [x] Firefox (WebExtension V3) — `manifest.firefox.json` with `browser_specific_settings`
-- [x] Shared core content/background/options code across all targets
-- [ ] Safari (Safari Web Extension) — separate build target
-- [ ] CI/build step that packages each browser's `.zip`/`.crx`/`.xpi`
-
-## Phase 5 — Later features (backlog)
+## Phase 4 — Coding agent action (backlog)
+- [ ] Coding agent reads tickets and takes action (create issues, write code, run tests, deploy)
 - [ ] Real-time / streaming inference with live overlay
 - [ ] Click heatmaps & session-replay DOM reconstruction
-- [ ] Encrypted export for sharing
+- [ ] Encrypted export for sharing recordings
 - [ ] Multi-session comparison & anomaly detection on click patterns
-- [ ] Opt-in end-to-end-encrypted remote/team sync
+
+## Phase 5 — Cross-browser (backlog)
+- [ ] Safari (Safari Web Extension) — separate build target
+- [ ] CI/build step that packages each browser's `.zip`/`.crx`/`.xpi`
 
 ## Design principles (never change)
 1. **Opt-in only.** Recording is off by default; explicit consent per session.

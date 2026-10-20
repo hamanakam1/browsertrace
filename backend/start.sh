@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the browsertrace extension backend.
+# Start the panther-intent-capture extension backend.
 # Listens on http://127.0.0.1:7890 by default (override with EXTENSION_BACKEND_PORT).
 set -euo pipefail
 
@@ -11,5 +11,5 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 PORT="${EXTENSION_BACKEND_PORT:-7890}"
-echo "Starting browsertrace backend on http://127.0.0.1:${PORT}"
+echo "Starting panther-intent-capture backend on http://127.0.0.1:${PORT}"
 exec python3 server.py

@@ -8,7 +8,7 @@
 
 ## Reporting a Vulnerability
 
-browsertrace deals with sensitive user data (screen recordings, interaction traces). We take security seriously.
+panther-intent-capture deals with sensitive user data (screen recordings, interaction traces). We take security seriously.
 
 If you discover a security vulnerability, please report it responsibly:
 
@@ -18,7 +18,7 @@ If you discover a security vulnerability, please report it responsibly:
 
 ## Security Principles
 
-browsertrace is designed around these security boundaries:
+panther-intent-capture is designed around these security boundaries:
 
 * **Opt-in capture** — recording never starts without explicit user consent
 * **Targeted capture** — only pages you configure in the manifest are captured

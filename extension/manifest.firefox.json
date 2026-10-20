@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "browsertrace",
+  "name": "panther-intent-capture",
   "version": "1.0.0",
   "description": "Record page usage with consent and run local inference to learn from your own browsing.",
   "minimum_chrome_version": "109",
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "browsertrace@browsertrace.dev",
+      "id": "panther-intent-capture@panther-intent-capture.dev",
       "strict_min_version": "109"
     }
   },
@@ -30,7 +30,7 @@
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "browsertrace",
+    "default_title": "panther-intent-capture",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",

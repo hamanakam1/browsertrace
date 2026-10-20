@@ -1,24 +1,22 @@
-# browsertrace brand
+# panther-intent-capture brand
 
 ## Identity
-- **Name:** browsertrace (one word, lowercase)
-- **Pronunciation:** browse-trace
-- **Meaning:** browser + trace — records and traces browser/page usage
-- **Tagline:** Observe. Trace. Understand.
-- **Descriptor:** Local-first page usage tracing extension
+- **Name:** panther-intent-capture
+- **Pronunciation:** panther intent capture
+- **Meaning:** panther (stealthy, observant) + intent (purpose) + capture (record) — observes user intent on dashboards and portals and converts it into actionable tickets
+- **Tagline:** Capture Intent. Understand Behavior.
+- **Descriptor:** Local-first intent capture and ticket generation browser extension
 
 ## Colors
 
 | Role | Hex | Usage |
 |------|-----|-------|
-| Primary | `#6366f1` | indigo-500 — brand, primary actions |
-| Trace | `#06b6d4` | cyan-500 — movement, capture, video |
+| Primary | `#0a0a0a` | panther-black — brand, primary actions |
+| Dark surface | `#1a1a1a` | panther-dark — dark surfaces |
+| Trace / capture | `#06b6d4` | intent-cyan — movement, capture, video |
 | Consent/OK | `#10b981` | emerald-500 — enabled, recording allowed |
 | Stop/Delete | `#ef4444` | rose-500 — stop, delete, danger |
-| Background | `#0f172a` | slate-900 — dark surfaces |
-| Surface | `#1e293b` | slate-800 — cards, panels |
-| Text | `#f8fafc` | slate-50 — primary text |
-| Muted | `#94a3b8` | slate-400 — secondary text |
+| Accent | `#fbbf24` | amber-400 — panther accent |
 
 ## Typography
 - UI: system-ui, -apple-system, sans-serif

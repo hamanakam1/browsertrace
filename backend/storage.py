@@ -1,4 +1,4 @@
-"""File-backed storage for extension recordings under ~/.browsertrace/."""
+"""File-backed storage for extension recordings under ~/.panther-intent-capture/."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 HOME = Path.home()
-ROOT = HOME / ".browsertrace"
+ROOT = HOME / ".panther-intent-capture"
 RECORDINGS_DIR = ROOT / "recordings"
 EVENTS_DIR = ROOT / "events"
 INFERENCE_DIR = ROOT / "inference"

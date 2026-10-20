@@ -158,7 +158,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       await startRecording(tab.id);
     }
   } catch (err) {
-    console.error("browsertrace: recording toggle failed", err);
+    console.error("panther-intent-capture: recording toggle failed", err);
   }
 });
 

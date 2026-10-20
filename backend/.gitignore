@@ -1,7 +1,7 @@
-# Standalone backend for browsertrace extension
+# Standalone backend for panther-intent-capture extension
 # Copies recordings + inference results here (outside repo, live data)
 
-~/.browsertrace/
+~/.panther-intent-capture/
 
 # Python
 __pycache__/

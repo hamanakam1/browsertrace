@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.michaelhamanaka.browsertrace-backend</string>
+	<string>com.panther-intent-capture.backend</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/opt/homebrew/bin/python3</string>
@@ -14,9 +14,9 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>~/.browsertrace/browsertrace-backend.log</string>
+	<string>~/.panther-intent-capture/backend.log</string>
 	<key>StandardErrorPath</key>
-	<string>~/.browsertrace/browsertrace-backend-error.log</string>
+	<string>~/.panther-intent-capture/backend-error.log</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>EXTENSION_BACKEND_PORT</key>

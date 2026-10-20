@@ -23,7 +23,7 @@ async function fetchRecordings() {
     const data = await res.json();
     recordings = Array.isArray(data.recordings) ? data.recordings : [];
   } catch (err) {
-    console.error("browsertrace: failed to fetch recordings", err);
+    console.error("panther-intent-capture: failed to fetch recordings", err);
     recordings = [];
   }
   render();
@@ -79,7 +79,7 @@ async function playRecording(id) {
 
     await showInference(id);
   } catch (err) {
-    console.error("browsertrace: failed to open recording", err);
+    console.error("panther-intent-capture: failed to open recording", err);
     alert("Failed to load recording.");
   }
 }
@@ -109,7 +109,7 @@ async function showInference(id) {
     inferenceMeta.textContent = `Model: ${result.model || "—"} · Frames: ${result.frames_sampled || 0} · Events: ${result.events_count || 0} · Took ${result.duration_seconds || 0}s`;
     inferenceBody.textContent = result.narrative || "No narrative available.";
   } catch (err) {
-    console.error("browsertrace: failed to fetch inference", err);
+    console.error("panther-intent-capture: failed to fetch inference", err);
     inferenceEmpty.style.display = "block";
   }
 }
@@ -122,7 +122,7 @@ async function deleteRecording(id) {
     if (selectedId === id) closeView();
     await fetchRecordings();
   } catch (err) {
-    console.error("browsertrace: failed to delete recording", err);
+    console.error("panther-intent-capture: failed to delete recording", err);
     alert("Failed to delete recording.");
   }
 }

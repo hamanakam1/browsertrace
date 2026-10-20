@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Standalone backend for the browsertrace extension.
+"""Standalone backend for the panther-intent-capture extension.
 
-Stores recordings under ~/.browsertrace/ and runs local inference
+Stores recordings under ~/.panther-intent-capture/ and runs local inference
 via Ollama (http://127.0.0.1:11434/v1). Defaults to :7890.
 """
 
@@ -43,7 +43,7 @@ def main():
  \ \_\ \_\  \ \_\ \_\  \ \_\ \_\  \ \_\  \/\_____\  \ \_______\ \ \_\ \_\  \/\_____\  \ \_\ \_\  \ \_____\  \ \_____\
   \/_/\/_/   \/_/\/_/   \/_/\/_/   \/_/   \/_____/   \/_______/  \/_/\/_/   \/_____/   \/_/\/_/   \/_____/   \/_____/
 
-   browsertrace backend  v1.0.0   listening on http://{HOST}:{PORT}
+   panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
     local-first  •  consent-gated  •  secret-redacted  •  user-deletable
     """.format(HOST=HOST, PORT=PORT))
     try:

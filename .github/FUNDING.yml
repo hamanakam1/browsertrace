@@ -1,4 +1,4 @@
-name: browsertrace
-description: Local-first dashboard usage tracing extension
-homepage: https://github.com/hamanakam1/browsertrace
-issues: https://github.com/hamanakam1/browsertrace/issues
+name: panther-intent-capture
+description: Local-first intent capture + ticket generation extension
+homepage: https://github.com/hamanakam1/panther-intent-capture
+issues: https://github.com/hamanakam1/panther-intent-capture/issues

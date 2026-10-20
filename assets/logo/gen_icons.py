@@ -1,4 +1,4 @@
-"""Generate browsertrace brand icons (PNG) for the extension."""
+"""Generate panther-intent-capture brand icons (PNG) for the extension."""
 
 import math
 import os
@@ -11,7 +11,7 @@ BG = (15, 23, 42, 255)            # #0f172a
 
 
 def draw_logo(draw, cx, cy, scale):
-    """Draw the browsertrace mark: eye ring + pupil + cursor trace."""
+    """Draw the panther-intent-capture mark: eye ring + pupil + cursor trace."""
     r_outer = int(90 * scale)
     r_pupil = int(26 * scale)
 

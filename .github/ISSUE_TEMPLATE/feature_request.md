@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for browsertrace
+about: Suggest an idea for panther-intent-capture
 title: "[FEATURE] "
 labels: ["enhancement"]
 assignees: ""
