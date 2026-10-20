@@ -6,10 +6,10 @@ function looksSecret(key) {
 }
 
 function scrubValue(value) {
-  if (typeof value === "string") return "***REDACTED***";
-  if (typeof value === "number") return 0;
-  if (typeof value === "boolean") return false;
-  if (Array.isArray(value)) return value.map(() => "***REDACTED***");
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return value;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map(scrubValue);
   if (value && typeof value === "object") {
     const out = {};
     for (const [k, v] of Object.entries(value)) {

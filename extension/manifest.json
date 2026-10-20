@@ -12,13 +12,16 @@
   ],
 
   "host_permissions": [
-    "http://127.0.0.1:7878/*"
+    "http://127.0.0.1:7878/*",
+    "http://127.0.0.1:7890/*"
   ],
 
   "background": {
     "service_worker": "background/background.js",
     "type": "module"
   },
+
+  "options_page": "options/options.html",
 
   "action": {
     "default_popup": "popup/popup.html",

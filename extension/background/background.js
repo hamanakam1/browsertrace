@@ -1,12 +1,9 @@
-import { DASHBOARD_ORIGIN } from "./shared/constants.js";
+import { DASHBOARD_ORIGIN, RECORD_API } from "./shared/constants.js";
 import { recordConsentEvent } from "./shared/audit.js";
 import { sanitizeEventPayload } from "./shared/redaction.js";
 
 const EXTENSION_ID = chrome.runtime.id;
 let recordingSession = null; // { tabId, startTime, chunks, events, port }
-
-const PORT = 7878;
-const RECORD_API = `${DASHBOARD_ORIGIN}/api/extension/record`;
 const CONSENT_LOG_KEY = "extension.consent.log";
 
 /** Ensure an offscreen document exists so MediaRecorder survives SW suspension. */

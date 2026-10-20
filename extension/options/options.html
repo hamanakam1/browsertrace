@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Intelligence — Recordings</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<div class="shell">
+  <header>
+    <h1>Dashboard Intelligence</h1>
+    <a href="popup/popup.html" class="btn">Open Extension</a>
+  </header>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Recordings</h2>
+      <span id="count" class="badge">0</span>
+    </div>
+    <div id="empty" class="empty">No recordings yet. Start a recording from the extension popup.</div>
+    <table id="recordingsTable" style="display:none">
+      <thead>
+        <tr>
+          <th>Started</th><th>Duration</th><th>Events</th><th>Inference</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="recordingsBody"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Inference Result</h2>
+    </div>
+    <div id="inferenceView" style="display:none">
+      <div id="inferenceMeta"></div>
+      <pre id="inferenceBody"></pre>
+    </div>
+    <div id="inferenceEmpty" class="empty">Select a recording with inference to view results.</div>
+  </div>
+
+  <div class="footer">
+    Local-first &middot; Recordings stored under ~/.dashboard-extension/
+  </div>
+</div>
+<script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+.shell { font: 14px/1.5 system-ui, -apple-system, sans-serif; max-width: 980px; margin: 0 auto; padding: 24px; color: #111827; }
+header { display:flex; align-items:center; gap:16px; margin-bottom: 24px; }
+header h1 { font-size: 20px; margin: 0; }
+.btn { padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; color: #111827; font: 600 13px/1 system-ui; cursor: pointer; text-decoration: none; display:inline-block; }
+.btn:hover { background: #e5e7eb; }
+
+.card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; margin-bottom: 20px; background: #ffffff; overflow: hidden; }
+.card-header { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; background: #f9fafb; }
+.card-header h2 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #4b5563; }
+.badge { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: #e5e7eb; color: #374151; }
+
+.empty { padding: 32px 16px; text-align: center; color: #6b7280; font-size: 14px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 8px 12px; color: #6b7280; font-weight: 600; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid #e5e7eb; }
+td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; }
+tr:hover { background: #f9fafb; }
+
+.btn-small { padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #ffffff; color: #374151; font-size: 12px; cursor: pointer; margin-right: 6px; }
+.btn-small:hover { background: #f3f4f6; }
+.btn-danger { color: #dc2626; border-color: #fca5a5; }
+.btn-danger:hover { background: #fef2f2; }
+.btn-primary { background: #2563eb; border-color: #2563eb; color: #ffffff; }
+.btn-primary:hover { background: #1d4ed8; }
+
+.inference-badge { display:inline-block; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+.inference-badge.yes { background: #dcfce7; color: #166534; }
+.inference-badge.no { background: #f3f4f6; color: #6b7280; }
+
+#inferenceBody { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, monospace; color: #334155; max-height: 500px; overflow: auto; }
+#inferenceMeta { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+
+.footer { font-size: 11px; color: #9ca3af; margin-top: 24px; text-align: center; }

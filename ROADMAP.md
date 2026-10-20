@@ -1,39 +1,43 @@
 # Roadmap — Dashboard Intelligence Extension
 
-## Phase 1 — Edge MVP (now)
-- Manifest V3 extension for Microsoft Edge
-- Opt-in consent gate (default off)
-- Dashboard-tab-scoped video capture via `tabCapture`
-- Click / keyboard / change / submit interaction capture
-- Redaction of secret/credential fields
-- Visible recording indicator badge
-- Bundle video + events → POST to dashboard backend `/api/extension/record`
-- Consent audit log
+## Phase 1 — Edge MVP (complete)
+- [x] Manifest V3 extension for Microsoft Edge
+- [x] Opt-in consent gate (default off)
+- [x] Dashboard-tab-scoped video capture via `tabCapture`
+- [x] Click / keyboard / change / submit interaction capture
+- [x] Secret/credential redaction (extension + backend)
+- [x] Visible recording indicator badge
+- [x] Bundle video + events → POST to standalone backend `/api/extension/record`
+- [x] Consent audit log
+- [x] Standalone Python backend (:7890) with record/list/get/delete APIs
+- [x] Options page: recordings library + inference results + delete
 
-## Phase 2 — Inference pipeline
-- `POST /api/extension/infer/:id` on the dashboard backend
-- Sample recording frames, run local inference (Ollama `:11434` / MLX `:8081`)
-- Correlate inference summary with click timeline
-- Surfaced results in a dashboard Extension tab
+## Phase 2 — Inference pipeline (complete)
+- [x] `POST /api/extension/infer/:id` on the backend
+- [x] Sample recording frames via ffmpeg, run Ollama (`qwen3.8-hermes:latest`)
+- [x] Correlate inference summary with click timeline
+- [x] Inference results stored and retrievable via `GET /api/extension/infer/:id`
+- [x] 30-day TTL + cap on stored recordings
 
-## Phase 3 — Dashboard UI integration
-- Extension group/tab in `templates/index.html` nav
-- Recordings library: play video, view click timeline, delete
-- Consent + settings panel
-- Docs guide in `docs/help/`
+## Phase 3 — Polish (in progress)
+- [ ] Serve video files from backend (`GET /api/extension/recordings/:id/video`)
+- [ ] Play video in options page
+- [ ] Backend health + startup script
+- [ ] Error handling when backend is down
 
 ## Phase 4 — Cross-browser
-- Google Chrome (Manifest V3)
-- Firefox (WebExtension)
-- Safari (Safari Web Extension)
-- Shared core logic, per-browser adapters
+- [ ] Google Chrome (Manifest V3) — near-identical to Edge
+- [ ] Firefox (WebExtension) — `browser.*` API shim
+- [ ] Safari (Safari Web Extension) — separate build target
+- [ ] Shared core logic, per-browser adapters
+- [ ] CI/build step that packages each browser's `.zip`/`.crx`/`.xpi`
 
 ## Phase 5 — Later features (backlog)
-- Real-time / streaming inference with live overlay
-- Click heatmaps & session-replay DOM reconstruction
-- Encrypted export for sharing
-- Multi-session comparison & anomaly detection on click patterns
-- Opt-in end-to-end-encrypted remote/team sync
+- [ ] Real-time / streaming inference with live overlay
+- [ ] Click heatmaps & session-replay DOM reconstruction
+- [ ] Encrypted export for sharing
+- [ ] Multi-session comparison & anomaly detection on click patterns
+- [ ] Opt-in end-to-end-encrypted remote/team sync
 
 ## Design principles (never change)
 1. **Opt-in only.** Recording is off by default; explicit consent per session.

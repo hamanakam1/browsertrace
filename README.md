@@ -4,22 +4,43 @@ Standalone browser extension (Manifest V3) that observes dashboard usage and act
 
 The extension records, with explicit user consent, the video of the dashboard tab and the clicks/interactions within it, then runs inference against a local inference fleet to surface insights about how the dashboard is being used.
 
-## Scope
+## What it does
 
-- **Opt-in only.** Recording never starts without explicit per-session consent. Default is off.
-- **Dashboard-scoped.** Captures only the dashboard tab (`tabCapture`), never arbitrary websites, never full desktop by default.
-- **Local-first.** Recordings, click events, and inference results live on the operator's machine under `~/.dashboard-extension/`. Nothing leaves the machine unless the operator explicitly exports it.
-- **No secrets.** Credential/password/secret inputs are scrubbed before anything is stored.
-- **Visible indicator.** A persistent badge shows while recording; the browser enforces a tab indicator for `tabCapture`.
+1. **Opt-in recording** — user enables consent in the extension popup, then starts recording the dashboard tab.
+2. **Video + interaction capture** — `tabCapture` records the dashboard tab video; a content script captures click/keydown/change/submit interactions.
+3. **Secret redaction** — password/token/credential-named fields are scrubbed before anything is stored (both in the extension and the backend).
+4. **Local inference** — recordings are sent to a standalone Python backend that samples frames and runs Ollama (`http://127.0.0.1:11434/v1`) to produce a narrative analysis of the session.
+5. **Recordings library** — the extension options page lists recordings, shows inference results, and lets you delete recordings.
+
+## Architecture
+
+```
+Edge extension (Manifest V3)
+  ├── content script: click/interaction capture → background service worker
+  ├── offscreen doc: tabCapture video → MediaRecorder → WebM chunks
+  ├── popup: consent toggle, start/stop, status
+  ├── options: recordings library, inference results, delete
+  └── background: orchestrates capture, POSTs bundles to backend
+
+Standalone backend (Python, :7890)
+  ├── POST   /api/extension/record    — receive video + events bundle
+  ├── GET    /api/extension/recordings — list recordings
+  ├── GET    /api/extension/recordings/:id — recording details
+  ├── DELETE /api/extension/recordings/:id
+  ├── POST   /api/extension/infer/:id  — run Ollama inference
+  └── GET    /api/extension/infer/:id  — get inference result
+```
+
+Storage: `~/.dashboard-extension/{recordings,events,inference,consent.log,manifest.json}` (outside the repo, owner-only permissions).
 
 ## Browser targets
 
 | Browser | Manifest | Status |
 |---|---|---|
 | Microsoft Edge | V3 | Phase 1 (initial target) |
-| Google Chrome | V3 | Phase 4 |
-| Firefox | V2 / WebExtension | Phase 4 |
-| Safari | Safari Web Extension | Phase 4 |
+| Google Chrome | V3 | Planned |
+| Firefox | V2 / WebExtension | Planned |
+| Safari | Safari Web Extension | Planned |
 
 ## Repository layout
 
@@ -30,6 +51,7 @@ extension/
     background.js
   content/              # injected into dashboard tab
     content.js
+    content.css
   offscreen/            # keeps MediaRecorder alive across SW suspension
     offscreen.html
     offscreen.js
@@ -37,30 +59,71 @@ extension/
     popup.html
     popup.js
     popup.css
+  options/              # recordings library + inference results
+    options.html
+    options.js
+    options.css
   shared/               # cross-cutting helpers
-    events.js
+    constants.js
+    audit.js
     redaction.js
     storage.js
-dashboard-server/       # optional: routes to add to ai-dashboard server.py
-  extension_routes.md
+  icons/
+backend/
+  server.py             # standalone HTTP server (:7890)
+  api/routes.py         # record/list/get/delete/infer routes
+  inference.py          # frame sampling + Ollama chat
+  redaction.py          # secret redaction (defense in depth)
+  storage.py            # file-backed recording store
+tests/
+  redaction_test.mjs    # unit test
 ```
 
 ## Consent & privacy (hard gates)
 
 1. Consent is required before any recording starts. Default off.
-2. Recording is scoped to the dashboard tab only.
-3. A visible badge/icon shows while recording.
-4. Password/secret/credential fields are redacted from event payloads.
-5. Recordings and events are stored locally under `~/.dashboard-extension/`.
+2. Recording is scoped to the dashboard tab only (`http://127.0.0.1:7878/*`).
+3. A visible badge/icon shows while recording; the browser enforces a tab indicator.
+4. Password/secret/credential-named fields are redacted before storage.
+5. Recordings and inference stay on the operator's machine under `~/.dashboard-extension/`.
 6. Every start/stop is written to a consent audit log.
-7. Recordings carry a TTL; the user can delete any recording at any time.
+7. Recordings carry a 30-day TTL; the user can delete any recording at any time.
 
 ## Development
 
-```bash
-# Load the unpacked extension in Edge:
-# edge://extensions/ -> Developer mode -> Load unpacked -> select extension/
+### 1. Start the standalone backend
 
-# Run the dashboard (separate repo):
-# cd ~/Projects/ai-dashboard && python3 server.py   # :7878
+```bash
+cd ~/Projects/dashboard-extension/backend
+python3 server.py          # listens on http://127.0.0.1:7890
 ```
+
+### 2. Load the unpacked extension in Edge
+
+```
+edge://extensions/ → Developer mode → Load unpacked → select ~/Projects/dashboard-extension/extension
+```
+
+### 3. Record
+
+- Click the extension icon while on `http://127.0.0.1:7878`
+- Check the consent box, then click **Start Recording**
+- Do some dashboard interactions, then click **Stop Recording**
+- Open **Extension options** (from `edge://extensions/` → Details → Extension options) to view recordings and inference results
+
+### 4. Run the dashboard (separate repo)
+
+```bash
+cd ~/Projects/ai-dashboard && python3 server.py   # :7878
+```
+
+### Tests
+
+```bash
+# Extension redaction unit test (Deno)
+deno test tests/redaction_test.mjs
+```
+
+## Roadmap
+
+See `ROADMAP.md` for Phase 4 (cross-browser) and Phase 5 (real-time inference, heatmaps, encrypted export, etc.).

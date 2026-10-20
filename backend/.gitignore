@@ -1,0 +1,14 @@
+# Standalone backend for Dashboard Intelligence extension
+# Copies recordings + inference results here (outside repo, live data)
+
+~/.dashboard-extension/
+
+# Python
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
