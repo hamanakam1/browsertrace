@@ -7,7 +7,7 @@
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "dashboard-intelligence@michaelhamanaka.com",
+      "id": "browsertrace@browsertrace.dev",
       "strict_min_version": "109"
     }
   },

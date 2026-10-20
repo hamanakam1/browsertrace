@@ -1,6 +1,5 @@
 import { sanitizeEventPayload } from "./shared/redaction.js";
 import { recordConsentEvent } from "./shared/audit.js";
-import { DASHBOARD_ORIGIN } from "./shared/constants.js";
 
 const INTERACTION_TYPES = new Set(["click", "keydown", "change", "submit"]);
 let enabled = false;
@@ -11,7 +10,6 @@ function reportInteraction(type, target) {
   const payload = {
     type,
     ts: Date.now(),
-    tabId: (chrome.runtime && chrome.runtime.id) ? null : null,
     target: {
       tag: target.tagName,
       id: target.id || null,
@@ -25,10 +23,10 @@ function reportInteraction(type, target) {
       : null
   };
   const clean = sanitizeEventPayload(payload);
-  chrome.runtime.sendMessage({ type: "dashboard.interaction", payload: clean });
+  chrome.runtime.sendMessage({ type: "page.interaction", payload: clean });
 }
 
-/** Attach listeners to the dashboard document. */
+/** Attach listeners to the current page. */
 function attachListeners() {
   document.addEventListener("click", (e) => reportInteraction("click", e.target), true);
   document.addEventListener("keydown", (e) => reportInteraction("keydown", e.target), true);

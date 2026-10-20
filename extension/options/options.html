@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard Intelligence — Recordings</title>
+<title>browsertrace — Recordings</title>
 <link rel="stylesheet" href="options.css">
 </head>
 <body>
 <div class="shell">
   <header>
-    <h1>Dashboard Intelligence</h1>
+    <h1>browsertrace</h1>
     <a href="popup/popup.html" class="btn">Open Extension</a>
   </header>
 
@@ -22,7 +22,7 @@
     <table id="recordingsTable" style="display:none">
       <thead>
         <tr>
-          <th>Started</th><th>Duration</th><th>Events</th><th>Inference</th><th>Video</th><th>Actions</th>
+          <th>Started</th><th>URL</th><th>Duration</th><th>Events</th><th>Inference</th><th>Video</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="recordingsBody"></tbody>
@@ -45,11 +45,11 @@
       <div id="inferenceMeta" style="font-size:12px; color:#6b7280; margin-bottom:8px;"></div>
       <pre id="inferenceBody"></pre>
     </div>
-    <div id="inferenceEmpty" class="empty" style="margin-top:16px;">No inference result yet. Run inference from the extension or backend.</div>
+    <div id="inferenceEmpty" class="empty" style="margin-top:16px;">No inference result yet.</div>
   </div>
 
   <div class="footer">
-    Local-first &middot; Recordings stored under ~/.dashboard-extension/
+    Local-first &middot; For self-improvement &amp; learning
   </div>
 </div>
 <script type="module" src="options.js"></script>

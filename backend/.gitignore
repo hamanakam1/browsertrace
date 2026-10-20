@@ -1,7 +1,7 @@
 # Standalone backend for Dashboard Intelligence extension
 # Copies recordings + inference results here (outside repo, live data)
 
-~/.dashboard-extension/
+~/.browsertrace/
 
 # Python
 __pycache__/

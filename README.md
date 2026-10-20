@@ -1,144 +1,156 @@
 # browsertrace
 
-Standalone browser extension (Manifest V3) that observes dashboard usage and acts on that intelligence. Built first for Microsoft Edge, with Chrome, Firefox, and Safari targets planned.
+![browsertrace logo](assets/logo/browsertrace.svg)
+
+> Observe dashboard usage, trace interactions, infer insights — all locally, all with consent.
+
+**[browsertrace](https://github.com/hamanakam1/browsertrace)** is a Manifest V3 browser extension that records video of dashboard usage and click/interactions with explicit user consent, then runs local inference to surface how a dashboard is actually being used.
+
+Built first for **Microsoft Edge**, with **Chrome** and **Firefox** variants ready. Storage and inference stay on the operator's machine — nothing leaves unless you choose to export.
+
+---
+
+## Brand
+
+| | |
+|---|---|
+| **Name** | browsertrace |
+| **Tagline** | Observe. Trace. Understand. |
+| **Scope** | Browser extension + standalone local inference backend |
+| **Initial target** | Microsoft Edge (Manifest V3) |
+| **Also ready** | Google Chrome, Firefox |
+
+### Visual identity
+
+Brand colors:
+
+```
+#6366f1  indigo-500   primary
+#06b6d4  cyan-500     trace
+#10b981  emerald-500  consent / ok
+#ef4444  rose-500     stop / delete
+```
+
+The mark is a single continuous line forming both an **eye** (observe) and a **cursor trail** (trace).
+
+---
 
 ## What it does
 
-1. **Opt-in recording** — user enables consent in the extension popup, then starts recording the dashboard tab.
-2. **Video + interaction capture** — `tabCapture` records the dashboard tab video; a content script captures click/keydown/change/submit interactions.
-3. **Secret redaction** — password/token/credential-named fields are scrubbed before anything is stored (both in the extension and the backend).
-4. **Local inference** — recordings are sent to a standalone Python backend that samples frames and runs Ollama (`http://127.0.0.1:11434/v1`) to produce a narrative analysis of the session.
-5. **Recordings library** — the extension options page lists recordings, shows inference results, and lets you delete recordings.
+1. **Opt-in recording** — Consent is required before anything is captured. Default is off.
+2. **Dashboard-scoped capture** — Records only the dashboard tab via `tabCapture`. Never arbitrary sites, never full desktop by default.
+3. **Interaction tracing** — Captures click / keydown / change / submit events with target, coordinates, and timestamp.
+4. **Secret redaction** — Password / token / credential-named fields are scrubbed before storage (extension + backend).
+5. **Local inference** — Sampled frames are sent to a local Ollama instance; a narrative analysis of the session is generated.
+6. **Recordings library** — Play video, view inference results, delete recordings. 30-day TTL + cap.
+
+---
 
 ## Architecture
 
 ```
-Edge extension (Manifest V3)
-  ├── content script: click/interaction capture → background service worker
-  ├── offscreen doc: tabCapture video → MediaRecorder → WebM chunks
-  ├── popup: consent toggle, start/stop, status
-  ├── options: recordings library, inference results, delete
-  └── background: orchestrates capture, POSTs bundles to backend
+┌─────────────────────────────────────────────────────────────┐
+│  Browser Extension (Manifest V3)                            │
+│  ┌─────────┐  ┌──────────────┐  ┌─────────────────────┐    │
+│  │ Popup   │  │ Content script│  │ Offscreen (MediaRecorder)│ │
+│  │ consent │──▶ click events  │──▶ video + events bundle   │ │
+│  └─────────┘  └──────────────┘  └─────────────────────┘    │
+└───────────────────────────────┬─────────────────────────────┘
+                                │ POST multipart
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Standalone Backend (Python, :7890)                         │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐   │
+│  │ /api/record │──▶ storage     │──▶ /api/infer       │   │
+│  │ /list       │    (filesystem)│    (Ollama chat)    │   │
+│  │ /video      │    + redaction │    + narrative      │   │
+│  └─────────────┘  └──────────────┘  └─────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                                │ local only
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ~/.browsertrace/  (recordings, events, inference, consent) │
+└─────────────────────────────────────────────────────────────┘
+```
 
-Standalone backend (Python, :7890)
-  ├── POST   /api/extension/record        — receive video + events bundle
-  ├── GET    /api/extension/recordings    — list recordings
-  ├── GET    /api/extension/recordings/:id — recording details
-  ├── GET    /api/extension/recordings/:id/video — video (with Range support)
-  ├── DELETE /api/extension/recordings/:id
-  ├── POST   /api/extension/infer/:id     — run Ollama inference
-  └── GET    /api/extension/infer/:id     — get inference result
+---
 
-Storage: `~/.browsertrace/{recordings,events,inference,consent.log,manifest.json}` (outside the repo, owner-only permissions).
+## Quick start
 
-## Browser targets
-
-| Browser | Manifest | Status |
-|---|---|---|
-| Microsoft Edge | V3 | ✅ Ships (manifest.json) |
-| Google Chrome | V3 | ✅ Ready (manifest.chrome.json) |
-| Firefox | V3 | ✅ Ready (manifest.firefox.json) |
-| Safari | Safari Web Extension | Planned |
-
-## Running
+### 1. Start the backend
 
 ```bash
-# 1. Start the standalone backend (one command)
-cd ~/Projects/dashboard-extension/backend
-./start.sh              # or: python3 server.py   # :7890
+cd backend
+./start.sh          # listens on http://127.0.0.1:7890
+```
 
-# 2. (Optional) Install as a launchd service
+Or install as a launchd service:
+
+```bash
 cp backend/launchd/com.michaelhamanaka.browsertrace-backend.plist \
    ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.michaelhamanaka.browsertrace-backend.plist
-
-# 3. Load the unpacked extension in Edge
-# edge://extensions/ → Developer mode → Load unpacked → select extension/
-
-# 4. Record: click extension icon on http://127.0.0.1:7878 → enable consent → Start Recording
-# 5. View: Extension options → Recordings library → play video + inference
-## Repository layout
-
-```
-extension/
-  manifest.json         # Manifest V3
-  background/           # service worker
-    background.js
-  content/              # injected into dashboard tab
-    content.js
-    content.css
-  offscreen/            # keeps MediaRecorder alive across SW suspension
-    offscreen.html
-    offscreen.js
-  popup/                # consent toggle + status
-    popup.html
-    popup.js
-    popup.css
-  options/              # recordings library + inference results
-    options.html
-    options.js
-    options.css
-  shared/               # cross-cutting helpers
-    constants.js
-    audit.js
-    redaction.js
-    storage.js
-  icons/
-backend/
-  server.py             # standalone HTTP server (:7890)
-  api/routes.py         # record/list/get/delete/infer routes
-  inference.py          # frame sampling + Ollama chat
-  redaction.py          # secret redaction (defense in depth)
-  storage.py            # file-backed recording store
-tests/
-  redaction_test.mjs    # unit test
 ```
 
-## Consent & privacy (hard gates)
+### 2. Load the extension
 
-1. Consent is required before any recording starts. Default off.
-2. Recording is scoped to the dashboard tab only (`http://127.0.0.1:7878/*`).
-3. A visible badge/icon shows while recording; the browser enforces a tab indicator.
-4. Password/secret/credential-named fields are redacted before storage.
-5. Recordings and inference stay on the operator's machine under `~/.browsertrace/`.
-6. Every start/stop is written to a consent audit log.
-7. Recordings carry a 30-day TTL; the user can delete any recording at any time.
+**Microsoft Edge:**
+1. `edge://extensions/` → **Developer mode** → **Load unpacked**
+2. Select `extension/`
 
-## Development
-
-### 1. Start the standalone backend
-
-```bash
-cd ~/Projects/dashboard-extension/backend
-python3 server.py          # listens on http://127.0.0.1:7890
-```
-
-### 2. Load the unpacked extension in Edge
-
-```
-edge://extensions/ → Developer mode → Load unpacked → select ~/Projects/dashboard-extension/extension
-```
+**Google Chrome:** use `extension/manifest.chrome.json`  
+**Firefox:** use `extension/manifest.firefox.json`
 
 ### 3. Record
 
-- Click the extension icon while on `http://127.0.0.1:7878`
-- Check the consent box, then click **Start Recording**
-- Do some dashboard interactions, then click **Stop Recording**
-- Open **Extension options** (from `edge://extensions/` → Details → Extension options) to view recordings and inference results
+1. Open `http://127.0.0.1:7878` (your dashboard)
+2. Click the extension icon → enable consent → **Start Recording**
+3. Do some dashboard interactions
+4. Click **Stop Recording**
+5. Open **Extension options** → view video + inference results
 
-### 4. Run the dashboard (separate repo)
-
-```bash
-cd ~/Projects/ai-dashboard && python3 server.py   # :7878
-```
-
-### Tests
+### 4. Tests
 
 ```bash
 # Extension redaction unit test (Deno)
 deno test tests/redaction_test.mjs
 ```
 
-## Roadmap
+---
 
-See `ROADMAP.md` for Phase 4 (cross-browser) and Phase 5 (real-time inference, heatmaps, encrypted export, etc.).
+## Privacy & consent (hard gates)
+
+| Rule | Enforcement |
+|---|---|
+| **Opt-in only** | Recording is off by default; explicit consent per session |
+| **Dashboard-scoped** | `tabCapture` limited to the dashboard tab; no arbitrary sites |
+| **Visible indicator** | Persistent badge while recording; browser tab indicator enforced |
+| **No secrets** | Password/token/credential fields redacted before storage |
+| **Local-first** | Everything stays under `~/.browsertrace/` unless you export |
+| **User deletes** | 30-day TTL; any recording can be deleted at any time |
+| **Consent audit** | Every start/stop logged with timestamp |
+
+---
+
+## Contributing
+
+browsertrace is open source and we welcome contributions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to get started, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for our community standards.
+
+### Good first issues
+- Add a Safari Web Extension variant
+- Add real-time / streaming inference overlay
+- Add click heatmap visualization
+- Add encrypted export for sharing recordings
+
+### Security
+See [`SECURITY.md`](SECURITY.md) for vulnerability reporting.
+
+---
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+Made for observing dashboard usage — transparently, locally, and with consent.

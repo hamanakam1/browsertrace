@@ -1,4 +1,4 @@
-import { DASHBOARD_ORIGIN, RECORD_API, BACKEND_ORIGIN } from "../shared/constants.js";
+import { BACKEND_ORIGIN } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
 import { getState, setState } from "../shared/storage.js";
 
@@ -98,7 +98,6 @@ stopBtn.addEventListener("click", async () => {
   }
 });
 
-// Listen for state changes from background (e.g. recording indicator).
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "extension.recordingState") {
     recording = msg.recording;

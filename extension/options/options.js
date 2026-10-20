@@ -23,7 +23,7 @@ async function fetchRecordings() {
     const data = await res.json();
     recordings = Array.isArray(data.recordings) ? data.recordings : [];
   } catch (err) {
-    console.error("options: failed to fetch recordings", err);
+    console.error("browsertrace: failed to fetch recordings", err);
     recordings = [];
   }
   render();
@@ -37,12 +37,15 @@ function render() {
 
   bodyEl.innerHTML = "";
   for (const r of recordings) {
-    const tr = document.createElement("tr");
     const started = new Date(r.start_time * 1000).toLocaleString();
     const duration = (r.duration_ms / 1000).toFixed(1) + "s";
     const hasInf = r.has_inference ? "yes" : "no";
+    const url = r.url || "—";
+    const shortUrl = url.length > 40 ? url.slice(0, 37) + "…" : url;
+    tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${started}</td>
+      <td title="${esc(url)}">${shortUrl}</td>
       <td>${duration}</td>
       <td>${r.event_count}</td>
       <td><span class="inference-badge ${hasInf}">${hasInf === "yes" ? "✓" : "—"}</span></td>
@@ -55,6 +58,8 @@ function render() {
   }
 }
 
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m])); }
+
 async function playRecording(id) {
   selectedId = id;
   try {
@@ -64,9 +69,9 @@ async function playRecording(id) {
 
     viewTitle.textContent = `Recording · ${new Date(rec.start_time * 1000).toLocaleString()}`;
     viewMeta.innerHTML = `
+      URL: <b>${esc(rec.url || "—")}</b> &middot;
       Duration: <b>${(rec.duration_ms / 1000).toFixed(1)}s</b> &middot;
-      Events: <b>${rec.event_count}</b> &middot;
-      Extension: <b>${rec.extension_id || "—"}</b>
+      Events: <b>${rec.event_count}</b>
     `;
     recVideo.src = `${BACKEND_ORIGIN}/api/extension/recordings/${id}/video`;
 
@@ -74,7 +79,7 @@ async function playRecording(id) {
 
     await showInference(id);
   } catch (err) {
-    console.error("options: failed to open recording", err);
+    console.error("browsertrace: failed to open recording", err);
     alert("Failed to load recording.");
   }
 }
@@ -104,7 +109,7 @@ async function showInference(id) {
     inferenceMeta.textContent = `Model: ${result.model || "—"} · Frames: ${result.frames_sampled || 0} · Events: ${result.events_count || 0} · Took ${result.duration_seconds || 0}s`;
     inferenceBody.textContent = result.narrative || "No narrative available.";
   } catch (err) {
-    console.error("options: failed to fetch inference", err);
+    console.error("browsertrace: failed to fetch inference", err);
     inferenceEmpty.style.display = "block";
   }
 }
@@ -117,7 +122,7 @@ async function deleteRecording(id) {
     if (selectedId === id) closeView();
     await fetchRecordings();
   } catch (err) {
-    console.error("options: failed to delete recording", err);
+    console.error("browsertrace: failed to delete recording", err);
     alert("Failed to delete recording.");
   }
 }

@@ -1,9 +1,11 @@
-import { DASHBOARD_ORIGIN, RECORD_API } from "./shared/constants.js";
+import { BACKEND_ORIGIN } from "./shared/constants.js";
 import { recordConsentEvent } from "./shared/audit.js";
 import { sanitizeEventPayload } from "./shared/redaction.js";
 
 const EXTENSION_ID = chrome.runtime.id;
 let recordingSession = null; // { tabId, startTime, chunks, events, port }
+
+const RECORD_API = `${BACKEND_ORIGIN}/api/extension/record`;
 const CONSENT_LOG_KEY = "extension.consent.log";
 
 /** Ensure an offscreen document exists so MediaRecorder survives SW suspension. */
@@ -15,7 +17,7 @@ async function ensureOffscreen() {
   return await chrome.offscreen.createDocument({
     url: "offscreen/offscreen.html",
     reasons: ["MEDIA_RECORDING"],
-    justification: "Keep MediaRecorder alive while recording a dashboard tab."
+    justification: "Keep MediaRecorder alive while recording a page."
   });
 }
 
@@ -38,13 +40,13 @@ async function connectOffscreen() {
   return await chrome.runtime.connect({ name: "offscreen" });
 }
 
-/** Start recording the given tab. */
+/** Start recording the given tab. Works on any webpage. */
 async function startRecording(tabId) {
   if (recordingSession) throw new Error("Already recording.");
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || tab.id !== tabId) {
-    throw new Error("Recording is scoped to the active dashboard tab.");
+    throw new Error("Recording is scoped to the active tab.");
   }
 
   const port = await connectOffscreen();
@@ -76,7 +78,7 @@ async function startRecording(tabId) {
   return { tabId, startTime: recordingSession.startTime };
 }
 
-/** Stop recording, flush video + events to the dashboard backend. */
+/** Stop recording, flush video + events to the backend. */
 async function stopRecording() {
   const session = recordingSession;
   if (!session) return null;
@@ -104,6 +106,7 @@ async function stopRecording() {
   form.append("startTime", String(session.startTime));
   form.append("endTime", String(Date.now()));
   form.append("extensionId", EXTENSION_ID);
+  form.append("url", session.url || "");
 
   await fetch(RECORD_API, { method: "POST", body: form });
 
@@ -127,9 +130,9 @@ async function stopRecording() {
   return result;
 }
 
-/** Handle click events forwarded from the content script. */
+/** Handle interaction events forwarded from the content script. */
 function handleContentMessage(message, sender, sendResponse) {
-  if (message.type !== "dashboard.interaction") return;
+  if (message.type !== "page.interaction") return;
   if (!recordingSession || sender.tab.id !== recordingSession.tabId) return;
   recordingSession.events.push(sanitizeEventPayload(message.payload));
   sendResponse({ ok: true });
@@ -148,8 +151,6 @@ async function broadcastRecordingState(recording) {
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
-  const url = new URL(tab.url);
-  if (url.origin !== DASHBOARD_ORIGIN) return;
   try {
     if (recordingSession) {
       await stopRecording();
@@ -157,13 +158,13 @@ chrome.action.onClicked.addListener(async (tab) => {
       await startRecording(tab.id);
     }
   } catch (err) {
-    console.error("extension: recording toggle failed", err);
+    console.error("browsertrace: recording toggle failed", err);
   }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "extension.isEnabled") {
-    sendResponse({ ok: true, enabled: !!recordingSession || false });
+    sendResponse({ ok: true, enabled: !!recordingSession });
     return true;
   }
   if (message.type === "extension.startRecording") {

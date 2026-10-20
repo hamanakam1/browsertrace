@@ -14,9 +14,9 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/Users/michaelhamanaka/.ai-dashboard/browsertrace-backend.log</string>
+	<string>~/.browsertrace/browsertrace-backend.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/michaelhamanaka/.ai-dashboard/browsertrace-backend-error.log</string>
+	<string>~/.browsertrace/browsertrace-backend-error.log</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>EXTENSION_BACKEND_PORT</key>

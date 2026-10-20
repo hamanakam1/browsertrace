@@ -3,25 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard Intelligence</title>
+<title>browsertrace — Record & Learn</title>
 <link rel="stylesheet" href="popup.css">
 </head>
 <body>
 <div class="shell">
   <div id="backendBanner" class="banner warn" style="display:none">
-    Backend not reachable at <code>http://127.0.0.1:7890</code>. Start it with <code>backend/start.sh</code>.
+    Backend not reachable. Start it with <code>backend/start.sh</code>.
   </div>
   <div class="header">
-    <h1>Dashboard Intelligence</h1>
+    <h1>browsertrace</h1>
     <div class="status" id="status">Idle</div>
   </div>
 
   <div class="card consent-card">
     <div class="consent-row">
       <input type="checkbox" id="consent" />
-      <label for="consent">Enable recording &amp; inference on dashboard usage</label>
+      <label for="consent">Enable recording &amp; inference on page usage</label>
     </div>
-    <p class="note">Opt-in only. Dashboard tab only. Everything stays local.</p>
+    <p class="note">Opt-in only. Works on any page you choose. Everything stays local.</p>
   </div>
 
   <div class="card control-card">
@@ -36,7 +36,7 @@
   </div>
 
   <div class="footer">
-    Built for Microsoft Edge (Manifest V3). Local-first.
+    Local-first &middot; For self-improvement &amp; learning
   </div>
 </div>
 <script type="module" src="popup.js"></script>
