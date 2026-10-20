@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Intelligence</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="shell">
+  <div class="header">
+    <h1>Dashboard Intelligence</h1>
+    <div class="status" id="status">Idle</div>
+  </div>
+
+  <div class="card consent-card">
+    <div class="consent-row">
+      <input type="checkbox" id="consent" />
+      <label for="consent">Enable recording &amp; inference on dashboard usage</label>
+    </div>
+    <p class="note">Opt-in only. Dashboard tab only. Everything stays local.</p>
+  </div>
+
+  <div class="card control-card">
+    <button id="recordBtn" class="btn" disabled>Start Recording</button>
+    <button id="stopBtn" class="btn danger" disabled style="display:none">Stop Recording</button>
+    <div class="meta" id="meta"></div>
+  </div>
+
+  <div class="card log-card">
+    <h3>Consent log</h3>
+    <div id="log"></div>
+  </div>
+
+  <div class="footer">
+    Built for Microsoft Edge (Manifest V3). Local-first.
+  </div>
+</div>
+<script type="module" src="popup.js"></script>
+</body>
+</html>
