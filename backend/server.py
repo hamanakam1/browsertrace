@@ -37,14 +37,18 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print("""
- ______     ______     ______     __     ______     __         ______     __  __     ______     ______     ______  
-/\  __ \   /\  == \   /\  __ \   /\ \   /\  ___\   /\ \       /\  == \   /\ \_\ \   /\  == \   /\  __ \   /\  __ \ 
-\ \  __ \  \ \  __<   \ \  __ \  \ \ \  \ \___  \  \ \ \____  \ \  __<   \ \____ \  \ \  __<   \ \ \/\ \  \ \ \/\ \
- \ \_\ \_\  \ \_\ \_\  \ \_\ \_\  \ \_\  \/\_____\  \ \_______\ \ \_\ \_\  \/\_____\  \ \_\ \_\  \ \_____\  \ \_____\
-  \/_/\/_/   \/_/\/_/   \/_/\/_/   \/_/   \/_____/   \/_______/  \/_/\/_/   \/_____/   \/_/\/_/   \/_____/   \/_____/
+      ___
+     /   \
+    | o o |    eyes — observe
+    |  ^  |    intent cursor
+     \ _ /
+    /     \
+   /       \
+  |_________|
+   panther
 
-   panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
-    local-first  •  consent-gated  •  secret-redacted  •  user-deletable
+panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
+local-first  •  consent-gated  •  secret-redacted  •  user-deletable
     """.format(HOST=HOST, PORT=PORT))
     try:
         server.serve_forever()
