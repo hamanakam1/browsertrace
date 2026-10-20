@@ -19,17 +19,19 @@
 - [x] Inference results stored and retrievable via `GET /api/extension/infer/:id`
 - [x] 30-day TTL + cap on stored recordings
 
-## Phase 3 — Polish (in progress)
-- [ ] Serve video files from backend (`GET /api/extension/recordings/:id/video`)
-- [ ] Play video in options page
-- [ ] Backend health + startup script
-- [ ] Error handling when backend is down
+## Phase 3 — Polish (complete)
+- [x] Serve video files from backend (`GET /api/extension/recordings/:id/video`)
+- [x] HTTP Range request support for video seeking (206 Partial Content)
+- [x] Play video in options page player
+- [x] Backend health check + startup script (`backend/start.sh`)
+- [x] Launchd service plist for production (`com.michaelhamanaka.dashboard-extension-backend`)
+- [x] Backend-unavailable banner in popup, record disabled when down
 
-## Phase 4 — Cross-browser
-- [ ] Google Chrome (Manifest V3) — near-identical to Edge
-- [ ] Firefox (WebExtension) — `browser.*` API shim
+## Phase 4 — Cross-browser (complete)
+- [x] Google Chrome (Manifest V3) — `manifest.chrome.json`
+- [x] Firefox (WebExtension V3) — `manifest.firefox.json` with `browser_specific_settings`
+- [x] Shared core content/background/options code across all targets
 - [ ] Safari (Safari Web Extension) — separate build target
-- [ ] Shared core logic, per-browser adapters
 - [ ] CI/build step that packages each browser's `.zip`/`.crx`/`.xpi`
 
 ## Phase 5 — Later features (backlog)

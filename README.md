@@ -23,13 +23,13 @@ Edge extension (Manifest V3)
   └── background: orchestrates capture, POSTs bundles to backend
 
 Standalone backend (Python, :7890)
-  ├── POST   /api/extension/record    — receive video + events bundle
-  ├── GET    /api/extension/recordings — list recordings
+  ├── POST   /api/extension/record        — receive video + events bundle
+  ├── GET    /api/extension/recordings    — list recordings
   ├── GET    /api/extension/recordings/:id — recording details
+  ├── GET    /api/extension/recordings/:id/video — video (with Range support)
   ├── DELETE /api/extension/recordings/:id
-  ├── POST   /api/extension/infer/:id  — run Ollama inference
-  └── GET    /api/extension/infer/:id  — get inference result
-```
+  ├── POST   /api/extension/infer/:id     — run Ollama inference
+  └── GET    /api/extension/infer/:id     — get inference result
 
 Storage: `~/.dashboard-extension/{recordings,events,inference,consent.log,manifest.json}` (outside the repo, owner-only permissions).
 
@@ -37,11 +37,28 @@ Storage: `~/.dashboard-extension/{recordings,events,inference,consent.log,manife
 
 | Browser | Manifest | Status |
 |---|---|---|
-| Microsoft Edge | V3 | Phase 1 (initial target) |
-| Google Chrome | V3 | Planned |
-| Firefox | V2 / WebExtension | Planned |
+| Microsoft Edge | V3 | ✅ Ships (manifest.json) |
+| Google Chrome | V3 | ✅ Ready (manifest.chrome.json) |
+| Firefox | V3 | ✅ Ready (manifest.firefox.json) |
 | Safari | Safari Web Extension | Planned |
 
+## Running
+
+```bash
+# 1. Start the standalone backend (one command)
+cd ~/Projects/dashboard-extension/backend
+./start.sh              # or: python3 server.py   # :7890
+
+# 2. (Optional) Install as a launchd service
+cp backend/launchd/com.michaelhamanaka.dashboard-extension-backend.plist \
+   ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.michaelhamanaka.dashboard-extension-backend.plist
+
+# 3. Load the unpacked extension in Edge
+# edge://extensions/ → Developer mode → Load unpacked → select extension/
+
+# 4. Record: click extension icon on http://127.0.0.1:7878 → enable consent → Start Recording
+# 5. View: Extension options → Recordings library → play video + inference
 ## Repository layout
 
 ```
