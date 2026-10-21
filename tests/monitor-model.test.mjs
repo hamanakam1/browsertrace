@@ -197,3 +197,9 @@ test("a user-stated goal is never relabeled as a tentative behavioral inference"
   assert.equal(live.goal, "Find display settings");
   assert.equal(live.intent, "");
 });
+
+test("behavioral inference keeps one uncertainty label instead of duplicate prefixes", () => {
+  const input = liveCapture();
+  input.live.inferredIntent = "Tentative interpretation from recent controls: The user may be adjusting display settings.";
+  assert.equal(liveView(input, monitorView(input, context), context.now).intent, "The user may be adjusting display settings.");
+});

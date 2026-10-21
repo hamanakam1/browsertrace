@@ -61,6 +61,7 @@ function renderUnderstanding(state) {
   elements.observedPage.hidden = !live.page && !live.pageTitle;
   elements.statedGoal.textContent = live.goal ? `Your stated goal: ${live.goal}` : "No goal was provided for this capture.";
   elements.inferredIntent.textContent = live.intent ? `Tentative interpretation · rules: ${live.intent}` : "Not enough observed activity to infer an intent yet.";
+  elements.inferredIntent.hidden = !live.hasData;
   elements.frictionSection.hidden = !live.patterns.length;
   elements.frictionList.replaceChildren(...live.patterns.map(pattern => {
     const row = document.createElement("li");
@@ -84,8 +85,8 @@ function renderUnderstanding(state) {
   elements.liveAiToggle.disabled = !live.current || !visible() || !!operationPending;
   elements.liveAiStatus.textContent = aiError ? `Local AI unavailable: ${aiError}. Observed activity and rule-based interpretation continue; no cloud fallback.` :
     aiPending ? "Local AI is interpreting a bounded activity snapshot. Capture and Off remain available." :
-    aiEnabled ? "Local AI enabled for this capture only. Refreshes after new events, at most once every 15 seconds." :
-    live.current ? "Optional and off. Enable to interpret this capture with your local model." : "Start a capture to enable local AI insights.";
+    aiEnabled ? "On for this capture. New-event refreshes at most once every 15 seconds." :
+    live.current ? "Off. Enable for this capture only." : "Start a capture to enable local AI insights.";
   const result = aiResult?.sessionId === live.sessionId ? aiResult : null;
   elements.liveAiResult.hidden = !result;
   if (result) {

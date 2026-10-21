@@ -226,6 +226,11 @@ test("markup keeps power controls sticky, named and keyboard reachable at narrow
   assert.match(css, /\.power-panel\s*\{[^}]*position:\s*sticky/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /@media \(max-width: 340px\)/);
+  assert.match(html, /<details id="intentContext"[^>]*>\s*<summary>Capture context<\/summary>/);
+  assert.ok(html.indexOf('id="inferredIntent"') < html.indexOf('id="intentContext"'));
+  assert.match(html, /<details class="ai-consent-details"><summary>What enabling insights allows<\/summary>/);
+  assert.match(html, /No screenshots, cloud fallback or work execution/);
+  assert.match(html, /Disabling stops new requests; an already-running local request may finish/);
 });
 
 const observed = (count = 4, sessionId = "synthetic-session") => ({...capture(), session: {...capture().session, sessionId, eventCount: count}, live: {sessionId, eventCount: count, observedAt: 1700000000000, source: "rules", summary: "Selected the display settings repeatedly.", inferredIntent: "Possibly trying to change the display.", goal: "Change display settings", page: {title: "Sample settings"}, recentEvents: [{seq: count - 1, ts: 1699999999000, type: "click", label: "Selected settings"}, {seq: count, ts: 1700000000000, type: "click", label: "Selected display"}], patterns: [{title: "Repeated selection", detail: "Repeated clicks might indicate an unclear response.", evidence: [count - 1, count], hypothesis: true}]}});

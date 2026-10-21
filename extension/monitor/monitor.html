@@ -28,16 +28,18 @@
     <section class="understanding-card" aria-label="Live understanding">
       <div class="section-heading"><h2>What Panther is noticing</h2><span id="understandingMode" class="source-label">Not capturing</span></div>
       <p id="understandingSummary" class="understanding-summary">Panther is not capturing. Choose a webpage and start a consented capture from the toolbar.</p>
+      <p id="inferredIntent" class="inferred-intent"></p>
       <p id="observationFreshness" class="freshness">No captured activity yet.</p>
-      <div id="intentContext" class="intent-context" hidden>
+      <details id="intentContext" class="intent-context" hidden>
+        <summary>Capture context</summary>
         <p id="observedPage" class="small"></p>
         <p id="statedGoal" class="small"></p>
-        <p id="inferredIntent" class="small"></p>
-      </div>
+      </details>
       <div id="frictionSection" class="friction-section" hidden><h3>Possible friction · not a finding</h3><ul id="frictionList" class="friction-list"></ul></div>
       <div class="live-ai-controls">
         <label class="checkbox-label"><input id="liveAiToggle" type="checkbox" disabled><span>Live local AI insights</span></label>
-        <p class="small">Optional local model analysis of this capture’s sanitized activity and goal. No screenshots, cloud fallback or work execution. Off by default. Disabling stops new requests; an already-running local request may finish.</p>
+        <p class="small">Local-only analysis of sanitized activity and goal. Off by default.</p>
+        <details class="ai-consent-details"><summary>What enabling insights allows</summary><p class="small">Only this capture’s sanitized activity and stated goal go to your local model. No screenshots, cloud fallback or work execution. Disabling stops new requests; an already-running local request may finish. Closing or hiding this window also disables insights.</p></details>
         <p id="liveAiStatus" class="small" role="status">Start a capture to enable local AI insights.</p>
         <div id="liveAiResult" class="ai-result" hidden><span id="liveAiProvenance" class="source-label"></span><p id="liveAiSummary"></p><p id="liveAiIntent" class="small"></p><p id="liveAiIssue" class="small" hidden></p><p id="liveAiEvidence" class="small"></p></div>
       </div>

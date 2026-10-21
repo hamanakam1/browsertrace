@@ -41,7 +41,7 @@ export function monitorView(snapshot = {}, context = {}) {
   } else if (session) {
     if (snapshot.status === "recording") {
       activity = "Capturing"; tone = "active";
-      detail = "Recording interactions in your chosen tab. Event counts should increase as you use that page.";
+      detail = "Capturing interactions in your chosen tab.";
     } else if (snapshot.status === "saving") {
       activity = "Saving"; tone = "active"; detail = "Saving captured evidence to the local backend.";
     } else {
@@ -74,7 +74,7 @@ export function monitorView(snapshot = {}, context = {}) {
 
   return {
     power, title, on, fresh, checkedAt, activity, detail, tone,
-    runtimeHelp: on ? "Native helper confirms a running backend process. This is not a backend or destination health check." :
+    runtimeHelp: on ? "Backend process confirmed; not a backend or destination health check." :
       power === "off" ? "No capture or automatic delivery starts while Panther is off." :
       power === "unknown" ? "Connection to the extension is unconfirmed. Do not treat the last known On state as live." :
       power === "error" ? "The runtime could not confirm its state. Turn off remains available." :
@@ -117,7 +117,7 @@ export function liveView(snapshot = {}, state = {}, now = Date.now()) {
   return {
     hasData, current, sessionId: hasData ? live.sessionId : "", events, observedAt, recentEvents, patterns,
     summary: hasData ? text(live.summary) || "Waiting for captured interactions to describe this session." : "Panther is not capturing. Choose a webpage and start a consented capture from the toolbar.",
-    goal: hasData ? text(live.goal) : "", intent: /^User-stated goal:/i.test(inferred) ? "" : inferred,
+    goal: hasData ? text(live.goal) : "", intent: /^User-stated goal:/i.test(inferred) ? "" : inferred.replace(/^Tentative interpretation from recent controls:\s*/i, ""),
     page: hasData ? text(live.page?.url).slice(0, 220) : "",
     pageTitle: hasData ? text(live.page?.title).slice(0, 160) : "",
     mode: current ? "Live · rules" : hasData ? "Historical · rules" : "Not capturing",
