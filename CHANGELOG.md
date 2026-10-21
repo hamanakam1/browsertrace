@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [1.5.0] - 2026-10-21
+
+### Added
+- Live, numbered action feed and bounded rules-based interpretation in the status window, with stated goals, last-observed freshness, and evidence-linked possible-friction hypotheses.
+- Separately opted-in local AI interpretation of new observations, with model/evidence coverage, request throttling, no remote fallback, and no ticket or execution side effects.
+- Scoped cancellation and late-response fences for Off, Stop, consent withdrawal, stale status, session changes, and hidden or closed windows.
+
+### Changed
+- Captured-page status excludes the live projection; only the trusted monitor receives it. Saved results retain a bounded rules summary explicitly labeled as history.
+
 ## [1.4.0] - 2026-10-21
 
 ### Added

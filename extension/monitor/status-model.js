@@ -99,3 +99,29 @@ export function monitorView(snapshot = {}, context = {}) {
     retained
   };
 }
+
+// Only the background's bounded, sanitized projection is rendered here. Raw
+// session events, typed values and screenshot pixels never enter this view.
+export function liveView(snapshot = {}, state = {}, now = Date.now()) {
+  const live = snapshot.live;
+  const hasData = !!live && typeof live.sessionId === "string" && !!live.sessionId;
+  const current = hasData && state.canStop === true && snapshot.enabled === true && live.sessionId === snapshot.session?.sessionId;
+  const events = hasData ? count(live.eventCount) : 0;
+  const observedAt = hasData ? time(live.observedAt) : null;
+  const age = observedAt ? Math.max(0, Math.floor((now - observedAt) / 1000)) : null;
+  const evidence = values => Array.isArray(values) ? values.filter(value => Number.isSafeInteger(value) && value > 0 && value <= events).slice(0, 12) : [];
+  const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  const recentEvents = hasData && Array.isArray(live.recentEvents) ? live.recentEvents.slice(-12).filter(record).map(event => ({seq: count(event.seq), ts: time(event.ts), label: text(event.label).slice(0, 240) || text(event.type).slice(0, 60) || "Page interaction"})).filter(event => event.seq > 0 && event.seq <= events) : [];
+  const patterns = hasData && Array.isArray(live.patterns) ? live.patterns.slice(0, 3).filter(record).map(pattern => ({title: text(pattern.title).slice(0, 120), detail: text(pattern.detail).slice(0, 300), evidence: evidence(pattern.evidence)})).filter(pattern => pattern.title && pattern.evidence.length) : [];
+  const inferred = hasData ? text(live.inferredIntent) : "";
+  return {
+    hasData, current, sessionId: hasData ? live.sessionId : "", events, observedAt, recentEvents, patterns,
+    summary: hasData ? text(live.summary) || "Waiting for captured interactions to describe this session." : "Panther is not capturing. Choose a webpage and start a consented capture from the toolbar.",
+    goal: hasData ? text(live.goal) : "", intent: /^User-stated goal:/i.test(inferred) ? "" : inferred,
+    page: hasData ? text(live.page?.url).slice(0, 220) : "",
+    pageTitle: hasData ? text(live.page?.title).slice(0, 160) : "",
+    mode: current ? "Live · rules" : hasData ? "Historical · rules" : "Not capturing",
+    freshness: observedAt ? `${current ? "Last observed event" : "Historical last event"}: ${age}s ago. ${current ? "No new events means no new observed activity." : "This is retained evidence, not current activity."}` : current ? "Capture is active; no observed events yet." : "No captured activity yet.",
+    coverage: recentEvents.length ? `Showing ${recentEvents.length} recent events of ${events}. Evidence numbers refer to this capture.` : ""
+  };
+}

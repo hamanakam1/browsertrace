@@ -7,6 +7,10 @@ import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "../extension/sh
 const control = { id: "test-extension", url: "chrome-extension://test-extension/popup/popup.html" };
 const page = { id: "test-extension", tab: { id: 7 }, frameId: 0, url: "https://app.test/dashboard" };
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
+const monitor = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
+const flushLive = () => new Promise(resolve => setImmediate(resolve));
+const liveReply = payload => ({ ok: true, sessionId: payload.sessionId, revision: payload.revision, source: "local-ai", model: "synthetic-local-model",
+  analyzedAt: 1700000010000, summary: "The captured control was clicked.", intent: "Possible attempt to save changes.", possibleIssue: "", evidence: [payload.events.at(-1).seq], confidence: "low", execution_authorized: false });
 
 function fixture(options = {}) {
   const data = { [SETTINGS_KEY]: { enabled: true }, ...clone(options.data || {}) };
@@ -58,11 +62,111 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
-    assert.equal(manifest.version, "1.4.0");
+    assert.equal(manifest.version, "1.5.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
     if (!variant || variant === ".chrome") assert.equal(manifest.minimum_chrome_version, "116");
+  }
+});
+
+test("live evidence is bounded and restricted to trusted monitor status, including after Save", async () => {
+  const f = fixture(); await f.start({goal: "Make this control clearer"});
+  for (let n = 0; n < 20; n++) await f.event({ target: {tag: "button", label: "Save", value: "NEVER KEEP", text: "PRIVATE RAW TEXT"} });
+  const live = (await f.send("extension.getStatus", {}, monitor)).live;
+  assert.equal(live.eventCount, 20);
+  assert.equal(live.recentEvents.length, 12);
+  assert.equal(live.recentEvents[0].seq, 9);
+  assert.equal(live.source, "rules");
+  assert.doesNotMatch(JSON.stringify(live), /NEVER KEEP|PRIVATE RAW TEXT/);
+  assert.equal((await f.send("extension.getStatus")).live, undefined);
+  assert.equal((await f.send("page.getStatus", {}, page)).live, undefined);
+  assert.equal(f.calls.fetch.length, 0);
+  await f.send("extension.stopRecording", {}, monitor);
+  const saved = await f.send("extension.getStatus", {}, monitor);
+  assert.equal(saved.live.eventCount, 20);
+  assert.equal(saved.result.live, undefined);
+  assert.equal((await f.send("page.getStatus", {}, page)).result.live, undefined);
+});
+
+test("live inference needs monitor authority, matching active session and explicit opt-in", async () => {
+  const f = fixture(); await f.start(); await f.event();
+  const args = {sessionId: f.data[SESSION_KEY].sessionId, consent: true};
+  for (const sender of [control, page, {...monitor, id:"other"}, {...monitor, url:`${monitor.url}/bad`}]) {
+    assert.equal((await f.send("extension.analyzeLive", args, sender)).ok, false);
+  }
+  await assert.rejects(f.send("extension.analyzeLive", {...args, consent:false}, monitor), /Enable live/);
+  await assert.rejects(f.send("extension.analyzeLive", {...args, sessionId:"stale"}, monitor), /current consented/);
+  await f.turnOff(); f.turnOn();
+  await assert.rejects(f.send("extension.analyzeLive", args, monitor), /current consented/);
+  assert.equal(f.calls.fetch.length, 0);
+});
+
+test("live inference uses only stored sanitized observations and makes no ticket or storage mutation", async () => {
+  const f = fixture({fetch: async (url, init) => ({ok:true,json:async()=>liveReply(JSON.parse(init.body))})});
+  await f.start({goal:"Improve Save token=private"}); await f.event();
+  const before = clone(f.data);
+  const result = await f.send("extension.analyzeLive", {sessionId:f.data[SESSION_KEY].sessionId,consent:true,events:[{label:"INJECTED"}],automation:{enabled:true}}, monitor);
+  assert.equal(result.source,"local-ai"); assert.equal(result.execution_authorized,false);
+  assert.deepEqual(f.data,before);
+  assert.equal(f.calls.fetch.length,1);
+  assert.ok(f.calls.fetch[0].url.endsWith("/live-insight"));
+  const payload = JSON.parse(f.calls.fetch[0].init.body);
+  assert.deepEqual(Object.keys(payload).sort(),["consent","events","goal","page","revision","sessionId"]);
+  assert.doesNotMatch(JSON.stringify(payload),/INJECTED|token=private|screenshots|automation/);
+  assert.equal(payload.events.length,1);
+});
+
+test("live inference is throttled and never retries an unchanged revision", async () => {
+  const f = fixture({fetch:async(url,init)=>({ok:true,json:async()=>liveReply(JSON.parse(init.body))})});
+  await f.start(); await f.event(); const args={sessionId:f.data[SESSION_KEY].sessionId,consent:true};
+  await f.send("extension.analyzeLive",args,monitor);
+  await f.event(); await assert.rejects(f.send("extension.analyzeLive",args,monitor),/15 seconds/);
+  f.advance(15000); await f.send("extension.analyzeLive",args,monitor);
+  f.advance(15000); await assert.rejects(f.send("extension.analyzeLive",args,monitor),/new captured actions/);
+  assert.equal(f.calls.fetch.length,2);
+});
+
+test("slow live inference does not block events or status and Off aborts and fences its result", async () => {
+  let resolve; const held=new Promise(r=>{resolve=r;});
+  const f=fixture({fetch:async()=>held}); await f.start(); await f.event();
+  const pending=f.send("extension.analyzeLive",{sessionId:f.data[SESSION_KEY].sessionId,consent:true},monitor);
+  const rejected=assert.rejects(pending,/interrupted|Off|superseded/); await flushLive();
+  await f.event(); assert.equal((await f.send("extension.getStatus",{},monitor)).live.eventCount,2);
+  await assert.rejects(f.send("extension.analyzeLive",{sessionId:f.data[SESSION_KEY].sessionId,consent:true},monitor),/already running/);
+  await f.turnOff(); await rejected;
+  assert.equal(f.calls.fetch[0].init.signal.aborted,true);
+  resolve({ok:true,json:async()=>liveReply(JSON.parse(f.calls.fetch[0].init.body))});
+  await flushLive(); assert.equal(f.data[SESSION_KEY].powerPaused,true);
+  assert.equal(f.data[RESULT_KEY],undefined);
+});
+
+test("monitor can cancel only its matching live inference without changing capture consent", async () => {
+  const f=fixture({fetch:async()=>new Promise(()=>{})}); await f.start(); await f.event();
+  const args={sessionId:f.data[SESSION_KEY].sessionId,consent:true};
+  const pending=f.send("extension.analyzeLive",args,monitor); const rejected=assert.rejects(pending,/interrupted/); await flushLive();
+  assert.equal((await f.send("extension.cancelLiveAnalysis",{sessionId:"other"},monitor)).cancelled,false);
+  assert.equal((await f.send("extension.cancelLiveAnalysis",args,monitor)).cancelled,true);
+  await rejected; assert.equal(f.data[SETTINGS_KEY].enabled,true); assert.equal(f.data[SESSION_KEY].status,"recording");
+});
+
+test("Stop and capture consent withdrawal abort optional inference without waiting for it", async () => {
+  for (const type of ["extension.stopRecording","extension.setEnabled"]) {
+    const f=fixture({fetch:async(url)=>url.endsWith("live-insight")?new Promise(()=>{}):({ok:true,json:async()=>url.endsWith("/record")?{id:"record-1"}:{tickets:[]}})});
+    await f.start(); await f.event();
+    const pending=f.send("extension.analyzeLive",{sessionId:f.data[SESSION_KEY].sessionId,consent:true},monitor);
+    const rejected=assert.rejects(pending,/interrupted/); await flushLive();
+    await f.send(type,{enabled:false}); await rejected;
+    assert.equal(f.calls.fetch[0].init.signal.aborted,true);
+  }
+});
+
+test("invalid live model evidence and malformed responses are rejected without state mutation", async () => {
+  for (const change of [{evidence:[999]}, {execution_authorized:true}, {sessionId:"other"}, {revision:999}, {confidence:"high"}, {summary:42}, {evidence:[]}]) {
+    const f=fixture({fetch:async(url,init)=>({ok:true,json:async()=>({...liveReply(JSON.parse(init.body)),...change})})});
+    await f.start(); await f.event(); const before=clone(f.data);
+    await assert.rejects(f.send("extension.analyzeLive",{sessionId:f.data[SESSION_KEY].sessionId,consent:true},monitor),/ungrounded/);
+    assert.deepEqual(f.data,before);
   }
 });
 

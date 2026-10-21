@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import storage
 import automation
+import live_insights
 from redaction import sanitize_events
 from tickets import generate_drafts, load_tickets, save_tickets, DraftGenerationError
 from integrations import dashboard_status, export_bundle, preview_ticket, submit_ticket
@@ -81,6 +82,27 @@ def _body_json(handler):
     if not isinstance(data, dict):
         raise ValueError("Expected a JSON object")
     return data
+
+
+def _live_insight_body(handler):
+    """Apply the small live-input cap before reading any request bytes."""
+    if handler.headers.get_content_type() != "application/json":
+        raise ValueError("Expected application/json")
+    if handler.headers.get("Transfer-Encoding"):
+        handler.close_connection = True
+        raise ValueError("Live interpretation requires a bounded Content-Length")
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        handler.close_connection = True
+        raise ValueError("Invalid Content-Length") from None
+    if not 0 < length <= live_insights.MAX_BODY_BYTES:
+        handler.close_connection = True
+        raise ValueError("Live interpretation body exceeds its bounded limit or is empty")
+    body = handler.rfile.read(length)
+    if len(body) != length:
+        raise ValueError("Incomplete request body")
+    return live_insights.parse_json(body)
 
 
 def _parse_multipart(handler):
@@ -330,6 +352,9 @@ def handle_request(handler: BaseHTTPRequestHandler):
         if parts == ["record"] and method == "POST":
             _record(handler)
             return
+        if parts == ["live-insight"] and method == "POST":
+            _json(handler, 200, live_insights.analyze(_live_insight_body(handler)))
+            return
         if parts == ["recordings"] and method == "GET":
             _json(handler, 200, {"recordings": storage.list_recordings()})
             return
@@ -438,6 +463,8 @@ def handle_request(handler: BaseHTTPRequestHandler):
             _json(handler, 200, export_bundle(entry, saved["data"]))
             return
         _json(handler, 404, {"error": "not found"})
+    except live_insights.LiveInsightError as exc:
+        _json(handler, exc.status, {"error": str(exc), "retryable": exc.status != 503})
     except DraftGenerationError as exc:
         _json(handler, 502, {"error": str(exc), "retryable": True})
     except (ValueError, TypeError, KeyError, UnicodeError) as exc:

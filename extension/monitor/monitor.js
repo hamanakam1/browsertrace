@@ -1,7 +1,7 @@
-import { monitorView } from "./status-model.js";
+import { monitorView, liveView } from "./status-model.js";
 
-const elements = Object.fromEntries(["powerStatus", "powerDot", "turnOnBtn", "turnOffBtn", "runtimeHelp", "activity", "activityDetail", "operationStatus", "connectionStatus", "error", "warning", "countsHeading", "eventCount", "screenshotCount", "historyNote", "resultSummary", "draftSummary", "receiptSummary", "receiptTime", "stopBtn", "cancelBtn", "reviewBtn"].map(id => [id, document.getElementById(id)]));
-const POLL_MS = 1800;
+const elements = Object.fromEntries(["powerStatus", "powerDot", "turnOnBtn", "turnOffBtn", "runtimeHelp", "activity", "activityDetail", "operationStatus", "connectionStatus", "error", "warning", "countsHeading", "eventCount", "screenshotCount", "historyNote", "resultSummary", "draftSummary", "receiptSummary", "receiptTime", "stopBtn", "cancelBtn", "reviewBtn", "understandingMode", "understandingSummary", "observationFreshness", "intentContext", "observedPage", "statedGoal", "inferredIntent", "frictionSection", "frictionList", "recentEmpty", "recentActions", "eventCoverage", "liveAiToggle", "liveAiStatus", "liveAiResult", "liveAiProvenance", "liveAiSummary", "liveAiIntent", "liveAiIssue", "liveAiEvidence"].map(id => [id, document.getElementById(id)]));
+const POLL_MS = 1000;
 const STATUS_TIMEOUT_MS = 6000;
 let snapshot = {};
 let checkedAt = null;
@@ -14,9 +14,124 @@ let epoch = 0;
 let operationEpoch = 0;
 let polling = false;
 let closed = false;
+let aiEnabled = false;
+let aiOptInEpoch = 0;
+let aiSessionId = "";
+let aiInFlight = false;
+let aiPending = false;
+let aiLastAttemptAt = null;
+let aiLastAttemptRevision = -1;
+let aiResult = null;
+let aiError = "";
+const AI_INTERVAL_MS = 15000;
 
 const clockText = timestamp => new Date(timestamp).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
 const view = () => monitorView(snapshot, {checkedAt, now: Date.now(), connected, pendingPower, connectionError, operationError});
+const visible = () => document.visibilityState !== "hidden";
+
+function disableAI({clear = false} = {}) {
+  const wasEnabled = aiEnabled;
+  aiEnabled = false;
+  ++aiOptInEpoch;
+  aiPending = false;
+  aiError = "";
+  if (clear) aiResult = null;
+  if (wasEnabled && aiSessionId) {
+    // Cancellation is best effort: an already-running local model may finish,
+    // but its late answer cannot enter this window and no next request starts.
+    const cancelledSessionId = aiSessionId;
+    Promise.resolve().then(() => chrome.runtime.sendMessage({type: "extension.cancelLiveAnalysis", sessionId: cancelledSessionId})).catch(() => {});
+  }
+}
+
+function renderUnderstanding(state) {
+  const live = liveView(snapshot, state, Date.now());
+  if (live.sessionId !== aiSessionId) {
+    disableAI({clear: true});
+    aiSessionId = live.sessionId;
+    aiLastAttemptRevision = -1;
+  }
+  if (aiEnabled && (!live.current || !visible() || operationPending)) disableAI();
+  elements.understandingMode.textContent = live.mode;
+  elements.understandingSummary.textContent = live.summary;
+  elements.observationFreshness.textContent = live.freshness;
+  elements.observationFreshness.dataset.stale = String(!live.current);
+  elements.intentContext.hidden = !live.hasData;
+  elements.observedPage.textContent = [live.page ? `Latest observed route: ${live.page}` : "", live.pageTitle ? `Capture-start title: ${live.pageTitle}` : ""].filter(Boolean).join(" · ");
+  elements.observedPage.hidden = !live.page && !live.pageTitle;
+  elements.statedGoal.textContent = live.goal ? `Your stated goal: ${live.goal}` : "No goal was provided for this capture.";
+  elements.inferredIntent.textContent = live.intent ? `Tentative interpretation · rules: ${live.intent}` : "Not enough observed activity to infer an intent yet.";
+  elements.frictionSection.hidden = !live.patterns.length;
+  elements.frictionList.replaceChildren(...live.patterns.map(pattern => {
+    const row = document.createElement("li");
+    row.textContent = `${pattern.title}: ${pattern.detail} Evidence ${pattern.evidence.map(seq => `#${seq}`).join(", ")}. Hypothesis, not a confirmed defect.`;
+    return row;
+  }));
+  elements.recentEmpty.hidden = live.recentEvents.length > 0;
+  elements.recentEmpty.textContent = live.current ? "Capture is active. Interact with the chosen page to see observed activity here." : live.hasData ? "No recorded actions are available in this retained summary." : "Nothing captured yet. Turning Panther on does not start recording.";
+  elements.recentActions.replaceChildren(...live.recentEvents.slice().reverse().map(event => {
+    const row = document.createElement("li"), meta = document.createElement("span"), label = document.createElement("span");
+    meta.className = "event-meta";
+    meta.textContent = `#${event.seq} · ${event.ts ? clockText(event.ts) : "time unknown"}`;
+    label.className = "event-label";
+    label.textContent = event.label;
+    row.append(meta, label);
+    return row;
+  }));
+  elements.eventCoverage.hidden = !live.coverage;
+  elements.eventCoverage.textContent = live.coverage;
+  elements.liveAiToggle.checked = aiEnabled;
+  elements.liveAiToggle.disabled = !live.current || !visible() || !!operationPending;
+  elements.liveAiStatus.textContent = aiError ? `Local AI unavailable: ${aiError}. Observed activity and rule-based interpretation continue; no cloud fallback.` :
+    aiPending ? "Local AI is interpreting a bounded activity snapshot. Capture and Off remain available." :
+    aiEnabled ? "Local AI enabled for this capture only. Refreshes after new events, at most once every 15 seconds." :
+    live.current ? "Optional and off. Enable to interpret this capture with your local model." : "Start a capture to enable local AI insights.";
+  const result = aiResult?.sessionId === live.sessionId ? aiResult : null;
+  elements.liveAiResult.hidden = !result;
+  if (result) {
+    const historical = !live.current || !aiEnabled;
+    const newer = Math.max(0, live.events - result.revision);
+    elements.liveAiProvenance.textContent = `${historical ? "Historical local AI hypothesis" : "Local AI hypothesis"} · ${result.model} · ${result.confidence ? `model-rated ${result.confidence} confidence` : "confidence not supplied"}`;
+    elements.liveAiSummary.textContent = result.summary;
+    elements.liveAiIntent.textContent = `Tentative intent: ${result.intent || "Not established from this snapshot."}`;
+    elements.liveAiIssue.hidden = !result.possibleIssue;
+    elements.liveAiIssue.textContent = result.possibleIssue ? `Possible issue, unconfirmed: ${result.possibleIssue}` : "";
+    elements.liveAiEvidence.textContent = `Analyzed through event #${result.revision}${newer ? ` · ${newer} newer events not analyzed` : ""}. Evidence ${result.evidence.length ? result.evidence.map(seq => `#${seq}`).join(", ") : "not supplied"}. ${result.analyzedAt ? `Analyzed ${clockText(result.analyzedAt)}. ` : ""}Interpretation is not a confirmed finding or ticket.`;
+  }
+  return live;
+}
+
+async function maybeAnalyze() {
+  const live = liveView(snapshot, view(), Date.now());
+  if (closed || operationPending || !aiEnabled || !visible() || !live.current || live.sessionId !== aiSessionId || aiInFlight || !live.events || live.events <= aiLastAttemptRevision || (aiLastAttemptAt !== null && Date.now() - aiLastAttemptAt < AI_INTERVAL_MS)) return;
+  const requestEpoch = epoch, consentEpoch = aiOptInEpoch, sessionId = live.sessionId;
+  aiInFlight = true;
+  aiPending = true;
+  aiError = "";
+  aiLastAttemptAt = Date.now();
+  aiLastAttemptRevision = live.events;
+  const requestedRevision = live.events;
+  const request = timedMessage("extension.analyzeLive", 20000, {sessionId, consent: true});
+  request.operation.then(() => {aiInFlight = false;}, () => {aiInFlight = false;});
+  render();
+  const stillAllowed = () => !closed && !operationPending && requestEpoch === epoch && consentEpoch === aiOptInEpoch && aiEnabled && visible() && liveView(snapshot, view(), Date.now()).current && snapshot.live?.sessionId === sessionId;
+  try {
+    const response = await request.response;
+    if (!stillAllowed()) return;
+    if (!response?.ok || response.sessionId !== sessionId || response.source !== "local-ai" || response.execution_authorized !== false || !Number.isSafeInteger(response.revision) || response.revision < requestedRevision) throw new Error(response?.error || "No valid local interpretation was confirmed");
+    const safeText = value => typeof value === "string" ? value.slice(0, 600) : "";
+    aiResult = {sessionId, revision: response.revision, summary: safeText(response.summary), intent: safeText(response.intent), possibleIssue: safeText(response.possibleIssue), model: safeText(response.model).slice(0, 120) || "local model", confidence: ["low", "medium"].includes(response.confidence) ? response.confidence : "", analyzedAt: Number.isFinite(response.analyzedAt) && response.analyzedAt > 0 ? response.analyzedAt : null, evidence: Array.isArray(response.evidence) ? response.evidence.filter(seq => Number.isSafeInteger(seq) && seq > 0 && seq <= response.revision).slice(0, 12) : []};
+    aiLastAttemptRevision = Math.max(aiLastAttemptRevision, response.revision);
+  } catch (error) {
+    if (!stillAllowed()) return;
+    aiError = String(error.message || "Local model response failed").slice(0, 180);
+  } finally {
+    if (consentEpoch === aiOptInEpoch && requestEpoch === epoch) {
+      aiPending = false;
+      render();
+    }
+  }
+}
 
 function render() {
   const state = view();
@@ -58,11 +173,12 @@ function render() {
   elements.cancelBtn.textContent = state.cancelLabel;
   elements.reviewBtn.hidden = !state.hasResult;
   elements.reviewBtn.disabled = !state.canReview || !!operationPending;
+  renderUnderstanding(state);
 }
 
-function timedMessage(type, timeoutMs) {
+function timedMessage(type, timeoutMs, payload = {}) {
   let timer;
-  const operation = Promise.resolve().then(() => chrome.runtime.sendMessage({type}));
+  const operation = Promise.resolve().then(() => chrome.runtime.sendMessage({type, ...payload}));
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error("The extension response timed out. Completion is unconfirmed; use Turn off if needed.")), timeoutMs);
   });
@@ -92,12 +208,14 @@ async function poll() {
     connectionError = `${error.message} If status does not recover, close and reopen this window.`;
   }
   render();
+  maybeAnalyze();
 }
 
 async function changePower(on) {
   const state = view();
   if (closed || (on ? !state.showOn : state.offDisabled)) return;
   const requestEpoch = ++epoch;
+  disableAI();
   ++operationEpoch;
   operationPending = "";
   operationError = "";
@@ -135,6 +253,7 @@ async function command(type) {
   const allowed = {"extension.stopRecording": state.canStop, "extension.cancelAutomation": state.canCancel, "extension.openReview": state.canReview};
   if (closed || operationPending || !allowed[type]) return;
   if (type === "extension.cancelAutomation" && !confirm("Cancel remaining automatic delivery? Already delivered tickets and requests in flight cannot be undone.")) return;
+  if (type === "extension.stopRecording") disableAI();
   const requestEpoch = epoch, requestOperation = ++operationEpoch;
   operationError = "";
   operationPending = {"extension.stopRecording": "Stop requested. Waiting for the capture result…", "extension.cancelAutomation": "Cancellation requested. Waiting for confirmation…", "extension.openReview": "Opening the saved result…"}[type];
@@ -145,7 +264,7 @@ async function command(type) {
     if (!response?.ok) throw new Error(response?.error || "The operation was not confirmed.");
     // Power is confirmed only by the dedicated status or power lane. In
     // particular, a completed Stop cannot replay an old On state after Off.
-    if (response.status) snapshot = {...response, power: snapshot.power};
+    if (response.status) snapshot = {...response, live: response.live === undefined ? snapshot.live : response.live, power: snapshot.power};
   } catch (error) {
     if (closed || requestEpoch !== epoch || requestOperation !== operationEpoch) return;
     operationError = error.message;
@@ -163,9 +282,22 @@ elements.turnOffBtn.addEventListener("click", () => changePower(false));
 elements.stopBtn.addEventListener("click", () => command("extension.stopRecording"));
 elements.cancelBtn.addEventListener("click", () => command("extension.cancelAutomation"));
 elements.reviewBtn.addEventListener("click", () => command("extension.openReview"));
+elements.liveAiToggle.addEventListener("change", () => {
+  const live = liveView(snapshot, view(), Date.now());
+  if (!elements.liveAiToggle.checked || !live.current || !visible() || operationPending) disableAI();
+  else { aiEnabled = true; ++aiOptInEpoch; aiError = ""; }
+  render();
+  maybeAnalyze();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!visible()) disableAI();
+  render();
+  if (visible()) poll();
+});
 const pollTimer = setInterval(poll, POLL_MS);
-const freshnessTimer = setInterval(render, 1000);
+const freshnessTimer = setInterval(() => {render(); maybeAnalyze();}, 1000);
 window.addEventListener("pagehide", () => {
+  disableAI();
   closed = true;
   ++epoch;
   clearInterval(pollTimer);

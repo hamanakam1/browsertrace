@@ -7,6 +7,7 @@ The product goal is to make a user's observed workflow and desired change unders
 - Explicit chosen-tab capture for Chrome/Edge 116+ on ordinary HTTP(S) pages.
 - Events-first capture with a floating status/control panel and popup recovery actions.
 - Persistent browser status window with runtime/activity separation, bounded status freshness, retained-history labeling, and independent Off controls. It opens on explicit On, not at login or browser startup.
+- Live numbered action feed, conservative rules-based interpretation and evidence-linked friction hypotheses; separately opted-in bounded local AI insights that never create tickets or execute work.
 - Explicit browser On / Off with a native helper on macOS/Linux; no login service or automatic reconnect. Off cancels unfinished delivery and stops only the owned backend.
 - Allowlisted control metadata; no typed values or keystrokes; URL and common-secret sanitization.
 - Separately consented screenshots, bounded to five per session. Pixels remain unredacted.

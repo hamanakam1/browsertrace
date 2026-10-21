@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../extension/monitor/status-model.js", import.meta.url), "utf8");
-const {monitorView, STALE_AFTER_MS} = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const {monitorView, liveView, STALE_AFTER_MS} = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 const context = {connected: true, checkedAt: 1700000000000, now: 1700000000100};
 const state = (status = "idle", values = {}) => ({ok: true, enabled: false, status, power: {state: "on"}, ...values});
 const automatic = (status = "delivering", values = {}) => state("automation", {result: {id: "saved", eventCount: 4, screenshotCount: 1, ticketCount: 3, automationPolicy: {enabled: true}, automationCheckedAt: 1699999999000, automation: {status, ticket_count: 3, delivered_count: 1, stage: "delivery"}, ...values}});
@@ -119,4 +119,81 @@ test("pending power controls cannot advertise active capture or disable Off duri
   const stopping = monitorView(input, {...context, pendingPower: "stopping"});
   assert.equal(stopping.title, "Turning off…");
   assert.equal(stopping.canStop, false);
+});
+
+const liveCapture = () => state("recording", {enabled: true, session: {sessionId: "synthetic-session", eventCount: 3}, live: {sessionId: "synthetic-session", eventCount: 3, observedAt: context.now - 4000, summary: "Repeated visits to the settings page.", goal: "Find display settings", inferredIntent: "You may be trying to adjust the display.", page: {title: "Sample settings"}, recentEvents: [{seq: 1, ts: context.now - 5000, label: "Opened settings"}, {seq: 2, ts: context.now - 4000, label: "Selected display"}], patterns: [{title: "Repeated navigation", detail: "Two visits may indicate backtracking.", evidence: [1, 2], hypothesis: true}]}});
+
+test("live projection separates observations, goal, tentative intent and event freshness", () => {
+  const input = liveCapture();
+  const live = liveView(input, monitorView(input, context), context.now);
+  assert.equal(live.current, true);
+  assert.equal(live.mode, "Live · rules");
+  assert.match(live.freshness, /Last observed event: 4s ago/);
+  assert.match(live.freshness, /No new events means no new observed activity/);
+  assert.equal(live.goal, "Find display settings");
+  assert.equal(live.intent, "You may be trying to adjust the display.");
+  assert.deepEqual(live.patterns[0].evidence, [1, 2]);
+});
+
+test("saved, paused, stale, revoked and mismatched captures cannot become live understanding", () => {
+  const original = liveCapture();
+  const inputs = [
+    {...original, status: "ready", session: null, result: {id: "saved"}},
+    {...original, session: {...original.session, powerPaused: true}},
+    {...original, enabled: false},
+    {...original, session: {...original.session, sessionId: "another-session"}},
+    {...original, power: {state: "off"}}
+  ];
+  for (const input of inputs) {
+    const live = liveView(input, monitorView(input, context), context.now);
+    assert.equal(live.current, false);
+    assert.equal(live.mode, "Historical · rules");
+    assert.match(live.freshness, /retained evidence, not current activity/);
+  }
+  assert.equal(liveView(original, monitorView(original, {...context, connected: false}), context.now).current, false);
+});
+
+test("live projection bounds rows and text and drops unsupported evidence references", () => {
+  const input = liveCapture();
+  input.live.summary = "x".repeat(2000);
+  input.live.eventCount = 30;
+  input.live.recentEvents = Array.from({length: 30}, (_, i) => ({seq: i + 1, label: "y".repeat(1000)}));
+  input.live.patterns = Array.from({length: 9}, () => ({title: "Possible repeat", detail: "z".repeat(1000), evidence: [0, -1, 1, 999, "2", 3]}));
+  const live = liveView(input, monitorView(input, context), context.now);
+  assert.equal(live.summary.length, 600);
+  assert.equal(live.recentEvents.length, 12);
+  assert.equal(live.recentEvents[0].label.length, 240);
+  assert.equal(live.patterns.length, 3);
+  assert.equal(live.patterns[0].detail.length, 300);
+  assert.deepEqual(live.patterns[0].evidence, [1, 3]);
+  input.live.patterns = [{title: "Unsupported finding", evidence: [999]}];
+  assert.equal(liveView(input, monitorView(input, context), context.now).patterns.length, 0);
+});
+
+test("idle does not manufacture activity or an interpretation", () => {
+  const input = state();
+  const live = liveView(input, monitorView(input, context), context.now);
+  assert.equal(live.current, false);
+  assert.equal(live.hasData, false);
+  assert.match(live.summary, /not capturing/);
+  assert.equal(live.intent, "");
+  assert.deepEqual(live.recentEvents, []);
+});
+
+test("malformed retained projection entries cannot break the live window", () => {
+  const input = liveCapture();
+  input.live.recentEvents = [null, 4, "bad", [], {seq: 1, label: "Valid observation"}, {seq: 2, label: {bad: "data"}}];
+  input.live.patterns = [null, "bad", {title: "Possible repeated action", evidence: [1]}];
+  const live = liveView(input, monitorView(input, context), context.now);
+  assert.equal(live.recentEvents.length, 2);
+  assert.equal(live.recentEvents[1].label, "Page interaction");
+  assert.equal(live.patterns.length, 1);
+});
+
+test("a user-stated goal is never relabeled as a tentative behavioral inference", () => {
+  const input = liveCapture();
+  input.live.inferredIntent = `User-stated goal: ${input.live.goal}`;
+  const live = liveView(input, monitorView(input, context), context.now);
+  assert.equal(live.goal, "Find display settings");
+  assert.equal(live.intent, "");
 });

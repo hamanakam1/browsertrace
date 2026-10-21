@@ -1,6 +1,7 @@
 import { BACKEND_ORIGIN } from "./constants.js";
 import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "./redaction.js";
 import { trustedExtensionControl, trustedMonitorControl } from "./lifecycle.js";
+import { buildLiveActivity, sanitizeLiveActivity } from "./live-activity.js";
 
 export const SESSION_KEY = "extension.capture.session";
 export const RESULT_KEY = "extension.capture.result";
@@ -16,7 +17,7 @@ const MAX_SCREENSHOTS = 5;
 const MAX_SCREENSHOT_BYTES = 300000;
 const SCREENSHOT_COOLDOWN_MS = 3000;
 const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "extension-v1" };
-const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecording", "extension.cancelAutomation", "extension.openReview"]);
+const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecording", "extension.cancelAutomation", "extension.openReview", "extension.analyzeLive", "extension.cancelLiveAnalysis"]);
 
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
@@ -24,6 +25,10 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   let pollQueued = false;
   let frozen = false;
   let authorityEpoch = 0;
+  let liveRequest = null;
+  let lastLiveRequestAt = 0;
+  let lastLiveSession = "";
+  let lastLiveRevision = 0;
   const requests = new Set();
   const powered = () => !frozen && isPowered() === true;
   const requirePower = () => { if (!powered()) throw new Error("Panther is Off. Turn On explicitly before capturing or changing recordings."); };
@@ -82,10 +87,13 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       await api.action.setBadgeBackgroundColor({ tabId: session.tabId, color: session.status === "recording" ? "#dc2626" : "#b45309" });
     } catch { /* The captured tab may have been closed. */ }
   };
-  const status = async () => {
+  const status = async (includeLive = false) => {
     const session = await read(SESSION_KEY);
     const settings = await read(SETTINGS_KEY) || {};
     const result = await read(RESULT_KEY) || null;
+    // The page panel never receives the goal, action feed or live interpretation.
+    const publicResult = result ? { ...result } : null;
+    if (publicResult) delete publicResult.live;
     return {
       ok: true, enabled: settings.enabled === true,
       status: session?.status || result?.status || "idle",
@@ -99,12 +107,75 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         uploadAttempts: session.uploadAttempts || 0, nextUploadRetryAt: session.nextUploadRetryAt || null,
         cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
-      result
+      result: publicResult,
+      ...(includeLive ? { live: session ? buildLiveActivity(session) : sanitizeLiveActivity(result?.live) } : {})
     };
   };
   const trustedControl = (sender) => trustedExtensionControl(api, sender);
   const validPage = (session, sender) => !!session && sender?.id === api.runtime.id &&
     sender.tab?.id === session.tabId && sender.frameId === 0 && origin(sender.url) === session.origin;
+
+  function cancelLiveAnalysis(sessionId) {
+    if (!liveRequest || (sessionId && sessionId !== liveRequest.sessionId)) return false;
+    liveRequest.controller.abort();
+    return true;
+  }
+
+  async function analyzeLive(message) {
+    requirePower();
+    if (message.consent !== true || typeof message.sessionId !== "string") throw new Error("Enable live local AI for this active capture first.");
+    if (liveRequest) throw new Error("A live interpretation is already running.");
+    const flight = { controller: new AbortController(), sessionId: message.sessionId };
+    const token = authorityEpoch;
+    liveRequest = flight;
+    let timer;
+    try {
+      const session = await read(SESSION_KEY);
+      const settings = await read(SETTINGS_KEY) || {};
+      requirePower();
+      if (flight.controller.signal.aborted || token !== authorityEpoch || settings.enabled !== true || session?.consent !== true ||
+          session.status !== "recording" || session.powerPaused || session.sessionId !== message.sessionId) {
+        throw new Error("Live interpretation requires the current consented, active capture.");
+      }
+      const live = buildLiveActivity(session);
+      if (!live?.recentEvents?.length) throw new Error("Waiting for captured actions before local interpretation.");
+      const startedAt = now();
+      if ((lastLiveRequestAt && startedAt - lastLiveRequestAt < 15000) ||
+          (lastLiveSession === session.sessionId && live.eventCount <= lastLiveRevision)) {
+        throw new Error("Live local AI waits at least 15 seconds and for new captured actions.");
+      }
+      lastLiveRequestAt = startedAt;
+      lastLiveSession = session.sessionId;
+      lastLiveRevision = live.eventCount;
+      timer = setTimeout(() => flight.controller.abort(), 18000);
+      const response = await request(`${BACKEND_ORIGIN}/api/extension/live-insight`, {
+        method: "POST", headers: HEADERS, signal: flight.controller.signal,
+        body: JSON.stringify({ consent: true, sessionId: live.sessionId, revision: live.eventCount,
+          goal: live.goal, page: live.page, events: live.recentEvents })
+      });
+      if (!response.ok) throw new Error(response.status === 429 ? "Local AI is busy or cooling down; observed activity continues." : "Local AI interpretation is unavailable. Observed activity continues; no remote fallback was used.");
+      const body = await response.json();
+      const current = await read(SESSION_KEY);
+      const enabled = (await read(SETTINGS_KEY))?.enabled === true;
+      requirePower();
+      if (flight.controller.signal.aborted || token !== authorityEpoch || !enabled || current?.consent !== true || current?.sessionId !== session.sessionId ||
+          current.status !== "recording" || current.powerPaused) throw new Error("Live interpretation was superseded; no result was retained.");
+      const evidence = new Set(live.recentEvents.map(event => event.seq));
+      if (body?.ok !== true || body.sessionId !== session.sessionId || body.revision !== live.eventCount ||
+          body.source !== "local-ai" || body.execution_authorized !== false || !["low", "medium"].includes(body.confidence) ||
+          !Number.isFinite(body.analyzedAt) || body.analyzedAt <= 0 ||
+          !Array.isArray(body.evidence) || body.evidence.length > 12 || !body.evidence.length ||
+          body.evidence.some(seq => !evidence.has(seq)) || new Set(body.evidence).size !== body.evidence.length ||
+          [["model", 120], ["summary", 500], ["intent", 300], ["possibleIssue", 300]].some(([key, max]) => typeof body[key] !== "string" || body[key].length > max) ||
+          !body.summary.trim()) throw new Error("Local AI returned an ungrounded interpretation; no result was retained.");
+      return { ok: true, sessionId: body.sessionId, revision: body.revision, source: "local-ai", model: sanitizeText(body.model, 120),
+        analyzedAt: body.analyzedAt, summary: sanitizeText(body.summary, 500), intent: sanitizeText(body.intent, 300),
+        possibleIssue: sanitizeText(body.possibleIssue, 300), evidence: [...body.evidence], confidence: body.confidence, execution_authorized: false };
+    } finally {
+      clearTimeout(timer);
+      if (liveRequest === flight) liveRequest = null;
+    }
+  }
 
   function automationFinished(result) {
     return !result.cancelRequested && !result.error && TERMINAL_AUTOMATION_STATES.has(result.automation?.status);
@@ -181,7 +252,8 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   async function savedResult(session, id, automation = null) {
     const automated = !!session.automation && !session.automationWithdrawn;
     const result = { id, status: automated ? "automation" : "generating", tabId: session.tabId, origin: session.origin,
-      eventCount: session.events.length, screenshotCount: session.screenshots.length, ticketCount: 0, error: "", warning: session.warning || "" };
+      eventCount: session.events.length, screenshotCount: session.screenshots.length, ticketCount: 0, error: "", warning: session.warning || "",
+      live: buildLiveActivity(session) };
     if (automated) {
       result.automationPolicy = structuredClone(session.automation);
       result.consentExpiresAt = session.startTime + CONSENT_TTL_MS;
@@ -466,6 +538,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   }
 
   async function stop(reason = "user") {
+    cancelLiveAnalysis();
     const session = await read(SESSION_KEY);
     if (!session) return status();
     if (session.status === "recording") {
@@ -533,15 +606,20 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       return { ok: false, ignored: true };
     }
     if (!trustedControl(sender)) return { ok: false, error: "Capture controls are only available in the extension." };
+    if (["extension.analyzeLive", "extension.cancelLiveAnalysis"].includes(message.type) && !trustedMonitorControl(api, sender)) {
+      return { ok: false, error: "Live interpretation controls are only available in the status window." };
+    }
     if (trustedMonitorControl(api, sender) && !MONITOR_COMMANDS.has(message.type)) {
       return { ok: false, error: "Choose capture consent, a tab, and any retry in the toolbar popup. The status window cannot start or resume capture or delivery." };
     }
     if (trustedMonitorControl(api, sender) && message.type === "extension.stopRecording" && (await read(SESSION_KEY))?.status !== "recording") {
       return { ok: false, error: "There is no active capture to stop. Use the toolbar popup for an explicit upload retry." };
     }
-    if (!["extension.getStatus", "extension.openReview"].includes(message.type) && !(message.type === "extension.setEnabled" && message.enabled !== true)) requirePower();
+    if (!["extension.getStatus", "extension.openReview", "extension.cancelLiveAnalysis"].includes(message.type) && !(message.type === "extension.setEnabled" && message.enabled !== true)) requirePower();
     switch (message.type) {
-      case "extension.getStatus": return status();
+      case "extension.getStatus": return status(trustedMonitorControl(api, sender));
+      case "extension.analyzeLive": return analyzeLive(message);
+      case "extension.cancelLiveAnalysis": return { ok: true, cancelled: typeof message.sessionId === "string" && !!message.sessionId && cancelLiveAnalysis(message.sessionId) };
       case "extension.getAutomationTarget": return automationTarget();
       case "extension.startRecording": return start(message);
       case "extension.stopRecording": return stop();
@@ -586,6 +664,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         return status();
       }
       case "extension.setEnabled": {
+        if (message.enabled !== true) cancelLiveAnalysis();
         const settings = await read(SETTINGS_KEY) || {};
         await api.storage.local.set({ [SETTINGS_KEY]: { ...settings, enabled: message.enabled === true } });
         await audit(message.enabled === true ? "consent_enabled" : "consent_disabled");
@@ -641,6 +720,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     freeze: (reason = "Panther is Off. Captured events are retained.") => {
       frozen = true;
       authorityEpoch++;
+      cancelLiveAnalysis();
       for (const controller of requests) controller.abort();
       return serial(() => quiesceLocal(reason));
     },
@@ -648,6 +728,9 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     // Pending sessions/results stay powerPaused; nothing is resumed here.
     unlock: () => { frozen = false; },
     message: (message, sender) => {
+      // Optional inference never occupies the event/save/Stop queue. Status and
+      // Off continue to work while a local model is slow or unavailable.
+      if (["extension.analyzeLive", "extension.cancelLiveAnalysis"].includes(message.type)) return recovery.then(() => handle(message, sender));
       // Status polls must remain responsive while upload/generation is running.
       if (message.type === "extension.getStatus" || message.type === "page.getStatus") return recovery.then(async () => {
         const response = await handle(message, sender);
