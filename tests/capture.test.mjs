@@ -256,8 +256,8 @@ test("monitor stop cannot replay a retained capture after Off and On", async () 
 });
 
 test("monitor can withdraw automatic delivery from an active capture without creating or delivering tickets", async () => {
-  const f = fixture({ fetch: async () => ({ ok: true, json: async () => ({ url: "http://127.0.0.1:7878" }) }) });
-  await f.start({ automation: { enabled: true, consent: true, target_url: "http://127.0.0.1:7878", max_tickets: 5, use_ai: false } });
+  const f = fixture({ fetch: async () => ({ ok: true, json: async () => ({ url: "http://127.0.0.1:8080" }) }) });
+  await f.start({ automation: { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", max_tickets: 5, use_ai: false } });
   const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
   const state = await f.send("extension.cancelAutomation", {}, sender);
   assert.equal(state.session.automationWithdrawn, true);

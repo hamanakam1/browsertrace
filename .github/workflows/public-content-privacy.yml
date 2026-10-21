@@ -1,0 +1,68 @@
+name: Public content privacy
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: 'Optional open PR number; blank audits main'
+        required: false
+        type: string
+      reviewed_control_changes:
+        description: 'I reviewed workflow/guard changes in this PR before authorizing this scan'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  privacy:
+    name: Trusted public-content scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Never check out PR head, execute its code, restore its caches or use its actions.
+      - name: Check out trusted base only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Test trusted checker without secrets
+        run: python3 -I -m unittest discover -s tests -p test_public_content_guard.py -v
+      - name: Resolve candidate objects without checking them out
+        id: candidate
+        run: python3 -I scripts/public_content_guard.py prepare
+      - name: Mark candidate pending
+        env:
+          GUARD_STATUS_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.head }}
+        run: python3 -I scripts/public_content_guard.py status --revision "$CANDIDATE_SHA" --state pending
+      - name: Inspect tracked content as data
+        id: scan
+        env:
+          PUBLIC_CONTENT_BLOCKLIST_JSON: ${{ secrets.PUBLIC_CONTENT_BLOCKLIST_JSON }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.head }}
+          BASE_SHA: ${{ steps.candidate.outputs.base }}
+          REVIEWED_CONTROLS: ${{ steps.candidate.outputs.reviewed }}
+        run: |
+          args=(scan --revision "$CANDIDATE_SHA")
+          if [ -n "$BASE_SHA" ]; then args+=(--base "$BASE_SHA"); fi
+          if [ "$REVIEWED_CONTROLS" = true ]; then args+=(--reviewed-controls); fi
+          python3 -I scripts/public_content_guard.py "${args[@]}"
+      - name: Record fail-closed result on the candidate commit
+        if: ${{ always() && steps.candidate.outputs.head != '' }}
+        env:
+          GUARD_STATUS_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.head }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          state=failure
+          if [ "$SCAN_OUTCOME" = success ]; then state=success; fi
+          python3 -I scripts/public_content_guard.py status --revision "$CANDIDATE_SHA" --state "$state"

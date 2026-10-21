@@ -39,3 +39,4 @@ Deletion removes local capture artifacts, drafts, and automation jobs, but canno
 ## Disclosure
 
 We will acknowledge your report within 72 hours and provide a status update within 7 days.
+
