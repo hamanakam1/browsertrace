@@ -207,6 +207,8 @@ class HttpTests(unittest.TestCase):
         code, data, _ = self.request(f"/api/extension/recordings/{rid}/screenshots")
         self.assertEqual(code, 200)
         self.assertEqual(set(data["screenshots"][0]), {"ts", "dataUrl"})
+        self.assertEqual(data["redaction_status"], "not_redacted")
+        self.assertTrue(data["review_required"])
         self.assertNotIn("must not persist", json.dumps(data))
         self.assertTrue(storage.get_recording(rid)["screenshots_consent"])
 

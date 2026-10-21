@@ -384,7 +384,15 @@ def handle_request(handler: BaseHTTPRequestHandler):
                 _json(handler, 200, {"events": _load_events(entry)})
             elif method == "GET" and parts[-1] == "screenshots":
                 shot_path = entry.get("screenshots_path")
-                _json(handler, 200, {"screenshots": json.loads(Path(shot_path).read_text()) if shot_path else []})
+                # Screenshot pixels are intentionally retained for review but are
+                # not redacted by the current capture pipeline. Keep that state
+                # explicit in the API so consumers cannot mistake image presence
+                # for privacy qualification.
+                _json(handler, 200, {
+                    "screenshots": json.loads(Path(shot_path).read_text()) if shot_path else [],
+                    "redaction_status": "not_redacted",
+                    "review_required": True,
+                })
             else:
                 _json(handler, 404, {"error": "Media playback is not supported in this capture release"})
             return
