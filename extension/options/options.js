@@ -186,11 +186,17 @@ async function openCapture(id) {
     ].filter(Boolean).join(" · ")));
   }
   $("screenshots").replaceChildren();
+  $("screenshotPrivacyNotice").hidden = true;
+  $("screenshotPrivacyNotice").textContent = "";
   $("screenshotsPanel").hidden = !capture.screenshot_count;
   if (capture.screenshot_count) {
     try {
       const shots = await api("recordings/" + id + "/screenshots");
       if (version !== requestVersion) return;
+      if (shots.review_required === true || shots.redaction_status === "not_redacted") {
+        $("screenshotPrivacyNotice").textContent = "Screenshot pixels are not redacted. Inspect each image before sharing or exporting this evidence.";
+        $("screenshotPrivacyNotice").hidden = false;
+      }
       for (const shot of shots.screenshots) {
         const img = document.createElement("img"); img.src = shot.dataUrl; img.alt = "Captured page evidence"; img.loading = "lazy";
         $("screenshots").append(img);

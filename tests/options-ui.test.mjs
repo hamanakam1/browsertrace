@@ -277,6 +277,18 @@ test("unavailable screenshot evidence does not hide automation status or cancell
   assert.equal(f.timers.size, 1);
 });
 
+test("unredacted screenshot state is visible during review", async () => {
+  const f = fixture({screenshots: true});
+  f.respond("GET", "recordings/a/screenshots", () => ({
+    screenshots: [{ts: 1700000000000, dataUrl: "data:image/jpeg;base64,ZmFrZQ=="}],
+    redaction_status: "not_redacted",
+    review_required: true,
+  }));
+  await f.ready;
+  assert.match(f.get("screenshotPrivacyNotice").textContent, /not redacted/i);
+  assert.equal(f.get("screenshotPrivacyNotice").hidden, false);
+});
+
 test("becoming hidden invalidates in-flight polling without scheduling background work", async () => {
   const f = fixture({initialJob: job("delivering")}); await f.ready;
   const stale = deferred();
