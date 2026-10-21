@@ -1,6 +1,6 @@
 import { BACKEND_ORIGIN } from "./constants.js";
 import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "./redaction.js";
-import { trustedExtensionControl } from "./lifecycle.js";
+import { trustedExtensionControl, trustedMonitorControl } from "./lifecycle.js";
 
 export const SESSION_KEY = "extension.capture.session";
 export const RESULT_KEY = "extension.capture.result";
@@ -16,6 +16,7 @@ const MAX_SCREENSHOTS = 5;
 const MAX_SCREENSHOT_BYTES = 300000;
 const SCREENSHOT_COOLDOWN_MS = 3000;
 const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "extension-v1" };
+const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecording", "extension.cancelAutomation", "extension.openReview"]);
 
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
@@ -94,6 +95,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         screenshotsConsent: session.screenshotConsent === true,
         error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url,
         automation: session.automation || null, automationWithdrawn: session.automationWithdrawn === true,
+        powerPaused: session.powerPaused === true,
         uploadAttempts: session.uploadAttempts || 0, nextUploadRetryAt: session.nextUploadRetryAt || null,
         cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
@@ -531,6 +533,12 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       return { ok: false, ignored: true };
     }
     if (!trustedControl(sender)) return { ok: false, error: "Capture controls are only available in the extension." };
+    if (trustedMonitorControl(api, sender) && !MONITOR_COMMANDS.has(message.type)) {
+      return { ok: false, error: "Choose capture consent, a tab, and any retry in the toolbar popup. The status window cannot start or resume capture or delivery." };
+    }
+    if (trustedMonitorControl(api, sender) && message.type === "extension.stopRecording" && (await read(SESSION_KEY))?.status !== "recording") {
+      return { ok: false, error: "There is no active capture to stop. Use the toolbar popup for an explicit upload retry." };
+    }
     if (!["extension.getStatus", "extension.openReview"].includes(message.type) && !(message.type === "extension.setEnabled" && message.enabled !== true)) requirePower();
     switch (message.type) {
       case "extension.getStatus": return status();

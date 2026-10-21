@@ -1,7 +1,7 @@
 import { BACKEND_ORIGIN } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
 
-const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner"].map((id) => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "monitorBtn", "monitorError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner"].map((id) => [id, document.getElementById(id)]));
 let current = { status: "idle", enabled: false, power: {state: "off", error: ""} };
 let busy = false;
 let operationError = "";
@@ -14,6 +14,8 @@ let statusRequest = 0;
 let operationRequest = 0;
 let connectionVersion = 0;
 let connectionActive = false;
+let openingMonitor = false;
+let monitorError = "";
 
 const runtimeState = () => pendingPower || current.power?.state || "off";
 const isOn = () => runtimeState() === "on";
@@ -36,6 +38,10 @@ function renderPower() {
   })[state] || "Capture and delivery are disabled until the runtime state is confirmed.";
   elements.powerError.textContent = power.error || "";
   elements.powerError.hidden = !power.error || !!pendingPower;
+  elements.monitorBtn.disabled = openingMonitor;
+  elements.monitorBtn.textContent = openingMonitor ? "Opening status window…" : "Open status window";
+  elements.monitorError.textContent = monitorError || current.monitorError || "";
+  elements.monitorError.hidden = !elements.monitorError.textContent;
   elements.setupNeeded.hidden = !(state === "error" && power.configured === false);
   elements.extensionId.textContent = chrome.runtime.id || "Open this popup from the installed Panther extension to read its ID.";
 }
@@ -199,7 +205,7 @@ async function changePower(on) {
     if (epoch !== powerEpoch) return;
     pendingPower = null;
     if (!response?.power) throw new Error(response?.error || "The runtime did not confirm its power state.");
-    render({...current, enabled: false, power: response.power});
+    render({...current, enabled: false, power: response.power, monitorError: response.monitorError || ""});
     if (!response.ok && !response.power.error) throw new Error(response.error || "The runtime operation did not complete.");
     await refresh();
   } catch (error) {
@@ -209,6 +215,17 @@ async function changePower(on) {
   }
 }
 
+elements.monitorBtn.addEventListener("click", async () => {
+  if (openingMonitor) return;
+  openingMonitor = true; monitorError = "";
+  renderPower();
+  try {
+    const response = await chrome.runtime.sendMessage({type: "extension.openMonitor"});
+    if (!response?.ok || response.monitorError) throw new Error(response?.monitorError || response?.error || "The status window could not open.");
+    current = {...current, monitorError: ""};
+  } catch (error) { monitorError = `Status window: ${error.message} Use this popup's power controls.`; }
+  finally { openingMonitor = false; renderPower(); }
+});
 elements.turnOnBtn.addEventListener("click", () => changePower(true));
 elements.turnOffBtn.addEventListener("click", () => changePower(false));
 elements.consent.addEventListener("change", () => command("extension.setEnabled", { enabled: elements.consent.checked }));

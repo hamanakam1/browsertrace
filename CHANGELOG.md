@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [1.4.0] - 2026-10-21
+
+### Added
+- Persistent status window opened by explicit On, with a toolbar control to reopen or focus it.
+- Separate runtime/activity labels, bounded status freshness, event and ticket counts, and visible retained-history and delivery-receipt boundaries.
+- Independent Off controls available during capture, generation, delivery, status waits, and startup.
+
+### Security
+- Opening, closing, polling, or restoring the status window does not start capture or the backend. No new browser permissions or startup service.
+- Status-window messages cannot grant capture consent, select a page, start recording, or retry abandoned work.
+
 ## [1.3.0] - 2026-10-21
 
 ### Added

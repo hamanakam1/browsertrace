@@ -7,6 +7,7 @@ body { margin: 0; }
 .power-card { position: sticky; top: 0; z-index: 2; border-color: #b6cbd8; box-shadow: 0 2px 6px #1118270c; }
 .power-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .power-actions { display: flex; gap: 8px; }
+.monitor-open { margin-top: 8px; }
 .power-on { background: #075985; border-color: #075985; color: #fff; }
 .helper-setup { margin-top: 8px; font-size: 12px; }
 .helper-setup summary { cursor: pointer; color: #334155; }

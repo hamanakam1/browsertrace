@@ -58,7 +58,11 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
+<<<<<<< Updated upstream
     assert.equal(manifest.version, "1.3.1");
+=======
+    assert.equal(manifest.version, "1.4.0");
+>>>>>>> Stashed changes
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -117,6 +121,48 @@ test("known extension popup and options pages can control capture in tabs or win
     `chrome-extension://attacker@${control.id}/popup/popup.html`,
     `https://${control.id}/popup/popup.html`
   ]) assert.equal((await f.send("extension.getStatus", {}, { ...control, url })).ok, false);
+});
+
+test("monitor can observe, stop active capture and review but cannot select consent or start or resume work", async () => {
+  const f = fixture();
+  const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
+  assert.equal((await f.send("extension.getStatus", {}, sender)).ok, true);
+  for (const type of ["extension.setEnabled", "extension.startRecording", "extension.getAutomationTarget",
+    "extension.refreshAutomation", "extension.retryAutomation", "extension.retryGeneration", "extension.retryUpload", "extension.discardCapture"]) {
+    const result = await f.send(type, { enabled: true, tabId: 7, consent: true }, sender);
+    assert.equal(result.ok, false, type);
+    assert.match(result.error, /toolbar popup/);
+  }
+  assert.equal(f.calls.fetch.length, 0);
+  assert.equal(f.calls.inject.length, 0);
+  assert.equal((await f.send("extension.openReview", {}, sender)).ok, true);
+  assert.equal(f.calls.tabs.length, 1);
+  await f.start();
+  await f.event();
+  assert.equal((await f.send("extension.stopRecording", {}, sender)).status, "ready");
+  assert.equal(f.calls.fetch.length, 2);
+});
+
+test("monitor stop cannot replay a retained capture after Off and On", async () => {
+  const f = fixture();
+  const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
+  await f.start(); await f.event(); await f.turnOff(); f.turnOn();
+  const state = await f.send("extension.getStatus", {}, sender);
+  assert.equal(state.status, "pending");
+  assert.equal(state.session.powerPaused, true);
+  assert.equal((await f.send("extension.stopRecording", {}, sender)).ok, false);
+  assert.equal(f.calls.fetch.length, 0);
+  assert.equal(f.data[SESSION_KEY].events.length, 1);
+});
+
+test("monitor can withdraw automatic delivery from an active capture without creating or delivering tickets", async () => {
+  const f = fixture({ fetch: async () => ({ ok: true, json: async () => ({ url: "http://127.0.0.1:7878" }) }) });
+  await f.start({ automation: { enabled: true, consent: true, target_url: "http://127.0.0.1:7878", max_tickets: 5, use_ai: false } });
+  const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
+  const state = await f.send("extension.cancelAutomation", {}, sender);
+  assert.equal(state.session.automationWithdrawn, true);
+  assert.equal(state.status, "recording");
+  assert.equal(f.calls.fetch.filter((call) => call.init?.method === "POST").length, 0);
 });
 
 test("allowlisted event metadata drops input values, keys, arbitrary bodies and secret URLs", async () => {

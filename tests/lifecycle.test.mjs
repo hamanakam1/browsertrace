@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { createLifecycleController, NATIVE_HOST, trustedExtensionControl } from "../extension/shared/lifecycle.js";
+import { createMonitorWindowController } from "../extension/shared/monitor-window.js";
 
 const control = { id: "test-extension", url: "chrome-extension://test-extension/popup/popup.html" };
+const monitorControl = { ...control, url: "chrome-extension://test-extension/monitor/monitor.html" };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const backgroundSource = (await readFile(new URL("../extension/background/background.js", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
 class Event {
@@ -53,7 +55,7 @@ test("worker initialization and repeated Off/status checks never connect or star
   assert.equal(f.lifecycle.snapshot().power.error, "");
 });
 
-test("only exact trusted extension popup/options URLs can start or stop the helper", async () => {
+test("only exact trusted extension popup/options/monitor URLs can start or stop the helper", async () => {
   const f = fixture();
   for (const sender of [
     { ...control, url: "https://app.test/", tab: { id: 7 } },
@@ -65,6 +67,9 @@ test("only exact trusted extension popup/options URLs can start or stop the help
   assert.equal(f.calls.connect.length, 0);
   assert.equal((await f.send("extension.turnOn", { ...control, tab: { id: 99 }, url: `chrome-extension://${control.id}/options/options.html?recording=fixture` })).power.state, "on");
   await f.send("extension.turnOff");
+  assert.equal((await f.send("extension.turnOn", monitorControl)).power.state, "on");
+  assert.equal((await f.send("extension.getPowerState", monitorControl)).power.state, "on");
+  assert.equal((await f.send("extension.turnOff", monitorControl)).power.state, "off");
 });
 
 test("explicit On owns one persistent native port and status uses that port without spawning another", async () => {
@@ -216,8 +221,15 @@ test("native stop proceeds immediately despite stalled local persistence and rep
   assert.equal(f.lifecycle.snapshot().power.error, "");
 });
 
-function backgroundFixture() {
-  const f = fixture();
+function backgroundFixture(options = {}) {
+  const f = fixture(options);
+  const windows = new Map();
+  f.calls.windows = [];
+  f.api.runtime.getContexts = async () => [...windows].map(([windowId, value]) => ({ windowId, documentUrl: value.url }));
+  f.api.windows = {
+    create: async (value) => { const id = windows.size + 1; windows.set(id, value); f.calls.windows.push({ action: "create", ...value }); return { id }; },
+    update: async (id, value) => { f.calls.windows.push({ action: "update", id, ...value }); return { id }; }
+  };
   Object.assign(f.api.runtime, { onMessage: new Event(), onStartup: new Event(), onInstalled: new Event() });
   f.api.tabs = { onUpdated: new Event(), onRemoved: new Event() };
   f.api.alarms = { onAlarm: new Event() };
@@ -225,7 +237,7 @@ function backgroundFixture() {
     tabUpdated: async () => {}, tabRemoved: async () => {}, browserStarted: async () => {}, alarm: async () => {} });
   let powered;
   vm.runInNewContext(backgroundSource, { chrome: f.api, fetch: () => { throw new Error("Unexpected HTTP request"); }, Date, console,
-    createCaptureController: (_api, _fetch, _now, options) => { powered = options.isPowered; return f.capture; }, createLifecycleController, trustedExtensionControl });
+    createCaptureController: (_api, _fetch, _now, options) => { powered = options.isPowered; return f.capture; }, createLifecycleController, trustedExtensionControl, createMonitorWindowController });
   return { ...f, powered: () => powered(), background: (type, sender = control) => new Promise((resolve) => f.api.runtime.onMessage.listeners[0]({ type }, sender, resolve)) };
 }
 
@@ -253,4 +265,66 @@ test("actual background startup, alarms, page status and spoofed controls cannot
   assert.equal((await f.background("extension.turnOn", page)).ok, false);
   await f.background("extension.getStatus");
   assert.equal(f.calls.connect.length, 0);
+  assert.equal(f.calls.windows.length, 0);
+});
+
+test("actual background explicit monitor opens while Off, reuses its window, and never starts a helper", async () => {
+  const f = backgroundFixture();
+  assert.equal((await f.background("extension.openMonitor")).power.state, "off");
+  assert.equal((await f.background("extension.openMonitor", monitorControl)).ok, true);
+  await f.background("extension.getStatus", monitorControl);
+  assert.equal(f.calls.connect.length, 0);
+  assert.deepEqual(f.calls.windows.map((call) => call.action), ["create", "update"]);
+  for (const url of ["https://app.test/", `chrome-extension://${control.id}.attacker/monitor/monitor.html`,
+    `chrome-extension://${control.id}/monitor/monitor.html/extra`, `chrome-extension://attacker@${control.id}/monitor/monitor.html`]) {
+    assert.equal((await f.background("extension.openMonitor", { ...monitorControl, url })).ok, false);
+  }
+  assert.equal(f.calls.windows.length, 2);
+});
+
+test("actual background opens monitor during native startup and monitor Off wins over the late On", async () => {
+  const f = backgroundFixture({ automatic: false });
+  const starting = f.background("extension.turnOn");
+  await flush();
+  assert.equal(f.calls.windows[0].action, "create");
+  assert.equal((await f.background("extension.getStatus", monitorControl)).power.state, "starting");
+  const stopping = f.background("extension.turnOff", monitorControl);
+  await flush();
+  assert.equal(f.ports[0].posts.at(-1).action, "stop");
+  f.ports[0].respond("start", "on");
+  assert.equal((await starting).ok, false);
+  f.ports[0].respond("stop", "off");
+  assert.equal((await stopping).power.state, "off");
+  assert.equal(f.calls.unlock, 0);
+  assert.equal(f.calls.windows.length, 1);
+});
+
+test("actual background keeps window failure separate from confirmed On and Off", async () => {
+  const f = backgroundFixture();
+  f.api.windows.create = async () => { throw new Error("Window denied"); };
+  const on = await f.background("extension.turnOn", monitorControl);
+  assert.equal(on.ok, true);
+  assert.equal(on.power.state, "on");
+  assert.equal(on.power.error, "");
+  assert.match(on.monitorError, /Window denied/);
+  const off = await f.background("extension.turnOff", monitorControl);
+  assert.equal(off.ok, true);
+  assert.equal(off.power.state, "off");
+  assert.equal(off.power.error, "");
+  assert.match(off.monitorError, /Window denied/);
+  assert.equal(f.calls.connect.length, 1);
+});
+
+test("actual background native On and Off replies never wait for stalled window creation", async () => {
+  const f = backgroundFixture();
+  let finishWindow;
+  f.api.windows.create = () => new Promise((resolve) => { finishWindow = resolve; });
+  const starting = f.background("extension.turnOn");
+  await flush();
+  assert.equal(f.powered(), true);
+  assert.equal((await starting).power.state, "on");
+  assert.equal((await f.background("extension.turnOff", monitorControl)).power.state, "off");
+  finishWindow({ id: 9 });
+  await flush();
+  assert.equal((await f.background("extension.getStatus", monitorControl)).power.state, "off");
 });

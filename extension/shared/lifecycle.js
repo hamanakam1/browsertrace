@@ -1,14 +1,22 @@
 export const NATIVE_HOST = "com.panther.intent_capture";
 
-export function trustedExtensionControl(api, sender) {
-  if (sender?.id !== api.runtime.id) return false;
+function extensionControlPath(api, sender) {
+  if (sender?.id !== api.runtime.id) return null;
   try {
     const source = new URL(sender.url);
     const extension = new URL(api.runtime.getURL(""));
-    return source.protocol === extension.protocol && source.host === extension.host &&
-      !source.username && !source.password &&
-      ["/popup/popup.html", "/options/options.html"].includes(source.pathname);
-  } catch { return false; }
+    if (source.protocol === extension.protocol && source.host === extension.host &&
+        !source.username && !source.password) return source.pathname;
+  } catch { /* A missing or invalid sender URL is not extension authority. */ }
+  return null;
+}
+
+export function trustedExtensionControl(api, sender) {
+  return ["/popup/popup.html", "/options/options.html", "/monitor/monitor.html"].includes(extensionControlPath(api, sender));
+}
+
+export function trustedMonitorControl(api, sender) {
+  return extensionControlPath(api, sender) === "/monitor/monitor.html";
 }
 
 /** The native port is a browser-owned lifetime lease, never a login service. */

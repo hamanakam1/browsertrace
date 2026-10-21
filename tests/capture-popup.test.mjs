@@ -248,6 +248,53 @@ test("pending automatic upload offers read-only reconciliation separately from r
 const powerState = (state, extra = {}) => ({state, error: "", configured: state === "on", ...extra});
 const idlePower = (state = "off") => ({ok: true, enabled: false, status: "idle", session: null, result: null, power: powerState(state)});
 
+test("status-window launch is available while Off and never turns on or starts capture", async () => {
+  const f = fixture(idlePower()); await flush();
+  assert.equal(f.elements.monitorBtn.disabled, false);
+  await f.click("monitorBtn");
+  assert.equal(f.calls.filter(call => call.type === "extension.openMonitor").length, 1);
+  assert.ok(f.calls.every(call => ["extension.getStatus", "extension.openMonitor"].includes(call.type)));
+  assert.equal(f.fetches.length, 0);
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+});
+
+test("status-window failures are separate from power and never disable Off", async () => {
+  const f = fixture(idlePower("on")); await flush();
+  f.respond("extension.openMonitor", () => ({ok: false, monitorError: "Window creation failed."}));
+  await f.click("monitorBtn");
+  assert.match(f.elements.monitorError.textContent, /Window creation failed/);
+  assert.equal(f.elements.monitorError.hidden, false);
+  assert.equal(f.elements.powerStatus.textContent, "Panther is on");
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  assert.equal(f.elements.monitorBtn.disabled, false);
+});
+
+test("pending status-window opening deduplicates clicks and cannot delay Off", async () => {
+  const f = fixture(idlePower("on")); await flush();
+  let finishWindow;
+  f.respond("extension.openMonitor", () => new Promise(resolve => { finishWindow = resolve; }));
+  f.respond("extension.turnOff", () => {
+    f.setState(idlePower()); return {ok: true, power: powerState("off")};
+  });
+  const opening = f.elements.monitorBtn.listeners.click(); await flush();
+  assert.equal(f.elements.monitorBtn.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  await f.elements.monitorBtn.listeners.click();
+  await f.click("turnOffBtn");
+  finishWindow({ok: true, power: powerState("on")}); await opening;
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+  assert.equal(f.calls.filter(call => call.type === "extension.openMonitor").length, 1);
+});
+
+test("background automatic-window error stays visible without claiming startup failed", async () => {
+  const f = fixture({...idlePower("on"), monitorError: "Status window unavailable; reopen from the popup."});
+  await flush();
+  assert.equal(f.elements.powerStatus.textContent, "Panther is on");
+  assert.match(f.elements.monitorError.textContent, /Status window unavailable/);
+  assert.equal(f.elements.powerError.hidden, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+});
+
 test("opening and polling an off popup never starts a helper or contacts the backend", async () => {
   const f = fixture(idlePower()); await flush();
   f.poll(); f.poll(); await flush();

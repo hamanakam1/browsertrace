@@ -1,6 +1,6 @@
 # Browser-controlled On / Off
 
-Panther is off until you explicitly choose **Turn Panther on** in the extension popup. There is no login item, launchd/systemd service, scheduled startup, or automatic reconnect. Opening the popup, checking status, receiving an alarm, or restarting the browser does not turn it on.
+Panther is off until you explicitly choose **Turn Panther on** in the toolbar popup or status window. There is no login item, launchd/systemd service, scheduled startup, or automatic reconnect. Opening either view, checking status, receiving an alarm, or restarting the browser does not turn it on.
 
 The browser starts a narrowly scoped local helper through [Chrome native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging), also [supported by Edge](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging). This requires a one-time local registration separate from loading the extension. An extension alone cannot launch an arbitrary local Python process.
 
@@ -39,6 +39,20 @@ Without `--dashboard-url`, capture, draft review, and JSON export work, but tick
 - Quitting the browser process or losing the helper connection stops the browser-owned backend. Closing only a window may leave the browser running in background, so use **Turn Panther off** for an explicit shutdown. There is no automatic reconnect. The next explicit On cancels stale unfinished automatic jobs before starting the worker; it does not silently resume abandoned delivery.
 
 Turning Panther on again does not resume recording. It requires fresh capture consent. Retained interrupted captures remain visible for explicit recovery; turning the application off is not the same as **Stop & deliver**. Historical delivery receipts and saved evidence are retained. Cancelled automatic jobs are not readmitted by toggling On.
+
+## Persistent status window (1.4.0)
+
+An explicit On opens a separate 400-by-620-pixel browser window. **Open status window** in the toolbar popup opens or focuses that same view without powering the backend. It stays open across tab switches and after Off, so shutdown is visible. Closing it hides the view; it does not turn Panther off, stop capture, or cancel an admitted workflow. Use the explicit Off button for that. The browser/OS may cover or minimize the window; this is not an always-on-top overlay.
+
+The window distinguishes runtime state from activity. **On** means the native helper has confirmed its owned process; it is not proof of ongoing HTTP, model, or Dashboard health. Capture needs separate consent and Start from the chosen webpage's toolbar popup. The status window cannot select a tab, grant capture consent, start recording, or retry abandoned work.
+
+While open, it polls status with a bounded wait and displays the last successful confirmation. A failed or stalled response shows unknown/stale state rather than leaving a cached On label looking live. Event counts indicate local capture; draft counts indicate generated results; delivery counts are historical receipts, not continuous verification of current Dashboard ticket state. Old retained evidence is labeled separately from active work after Off or a subsequent On.
+
+Off remains reachable during status requests, native startup, generation, Stop, and cancellation. Stop and cancel controls are limited to the existing session; they do not create a new capture or renew delivery authority. Off cannot retract requests already in flight.
+
+The window uses the existing extension APIs without a new `tabs` or all-URLs permission. Singleton discovery uses [Chrome's extension-only runtime contexts](https://developer.chrome.com/docs/extensions/reference/api/runtime#method-getContexts); its separate window uses [the windows API](https://developer.chrome.com/docs/extensions/reference/api/windows). Window creation failures are reported separately from power failures and do not disable the toolbar's Off control.
+
+Existing helper registrations do not need to be reinstalled for this UI update. Turn Panther off, reload the unpacked extension, then explicitly turn it on again. Neither reload nor status-window restoration may start the backend automatically.
 
 ## Failure states
 

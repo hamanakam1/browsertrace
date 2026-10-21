@@ -6,6 +6,7 @@ The product goal is to make a user's observed workflow and desired change unders
 
 - Explicit chosen-tab capture for Chrome/Edge 116+ on ordinary HTTP(S) pages.
 - Events-first capture with a floating status/control panel and popup recovery actions.
+- Persistent browser status window with runtime/activity separation, bounded status freshness, retained-history labeling, and independent Off controls. It opens on explicit On, not at login or browser startup.
 - Explicit browser On / Off with a native helper on macOS/Linux; no login service or automatic reconnect. Off cancels unfinished delivery and stops only the owned backend.
 - Allowlisted control metadata; no typed values or keystrokes; URL and common-secret sanitization.
 - Separately consented screenshots, bounded to five per session. Pixels remain unredacted.
@@ -28,8 +29,13 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 ## Next: qualify the complete user workflow
 
 - Exercise the unpacked extension in fresh Chrome and Edge profiles, including same-origin reloads, SPA routes, tab changes, service-worker suspension, and browser restart.
+<<<<<<< Updated upstream
 - Verify the popup and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
 - Run consented local ticket service captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
+=======
+- Verify the toolbar popup, persistent status window, and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
+- Run consented AI Dashboard captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
+>>>>>>> Stashed changes
 - Measure draft usefulness with representative examples: accurate evidence, clear expected behavior, useful acceptance criteria, and minimal manual correction.
 - Test an explicitly configured local model and report model/version, errors, latency, and whether any media was analyzed.
 - Establish a small, published compatibility matrix from actual website/browser checks.
