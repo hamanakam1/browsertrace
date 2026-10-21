@@ -37,31 +37,45 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print("""
-         ___
-        /   \
-       /  _  \
-      | (o o) |   watching browser
-      |   ^   |
-       \  -  /
-      /   |   \
-     /    |    \
-    |     |     |
-    |     |     |
-   /      |      \
-  /       |       \
- |   /\   |   /\   |
- |  /  \  |  /  \  |
-|  |    ||    |    |
-|  |    ||    |    |
- \  \   ||   /  /
-  \  \__||__/  /
-   \__________/
-   front paw  back paw
+               ___
+              /   \
+             /  _  \
+            | (o o) |
+            |   ^   |
+             \  -  /
+            /   |   \
+           /    |    \
+          /     |     \
+         |      |      |
+         |      |      |
+        /       |       \
+       /        |        \
+      |   \     |     /   |
+      |    \    |    /    |
+       \    \   |   /    /
+        \    \  |  /    /
+         \    \ | /    /
+          \____\|____/
+             |    |
+             |    |
+            /      \
+           /        \
+          |          |
+          |          |
+           \        /
+            \______/
+   ___          ___
+  /   \        /   \
+ |     |      |     |
+ |     |      |     |
+  \   /        \   /
+   \_/          \_/
 
    ┌─────────────┐
-   │   BROWSER   │
-   │  PAGE       │
-   │  CONTENT    │
+   │ ┌─────────┐ │
+   │ │         │ │
+   │ │         │ │
+   │ └─────────┘ │
    └─────────────┘
 
 panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
