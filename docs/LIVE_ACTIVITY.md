@@ -34,3 +34,5 @@ The bounded rules summary is retained with the local saved result so the monitor
 ## Verification scope
 
 Regression coverage includes projection/redaction limits, evidence identity, sender restrictions, immutable inference snapshots, request throttling, malformed model responses, timeout/cancellation, stale status, and Off/Stop/session-switch races. Browser qualification uses synthetic controls and isolated data. A successful model mock does not establish that a user's configured local model is installed, responsive, or semantically useful.
+
+See the [1.5.0 verification report](LIVE_ACTIVITY_TEST_RESULTS.md) for loaded-browser observations and remaining qualification boundaries.
