@@ -37,37 +37,32 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print("""
-                  ___
-                _(   _)_
-               /       \
-              |  o   o  |   eyes — observe
-              |    >    |   nose
-              |   ---   |   mouth
-               \  ___  /
-                \/   \/
-                 |   |
-      ___________|   |___________
-     /                           \
-    |        ___________          |
-    |       /           \         |
-    |      |             |        |
-     \     |             |     /
-      \    |             |    /
-       \   |             |   /
-        \  |             |  /
-         \ |             | /
-          |               |
-         /                 \
-        |                   |
-         \                 /
-          |               |
-         /   \         /   \
-        |     |       |     |
-        \     |       |     /
-         |    |       |    |
-         |   /         \   |
-         \__/           \__/
-       front paw      back paw
+         ___
+        /   \
+       /  _  \
+      | (o o) |   watching browser
+      |   ^   |
+       \  -  /
+      /   |   \
+     /    |    \
+    |     |     |
+    |     |     |
+   /      |      \
+  /       |       \
+ |   /\   |   /\   |
+ |  /  \  |  /  \  |
+|  |    ||    |    |
+|  |    ||    |    |
+ \  \   ||   /  /
+  \  \__||__/  /
+   \__________/
+   front paw  back paw
+
+   ┌─────────────┐
+   │   BROWSER   │
+   │  PAGE       │
+   │  CONTENT    │
+   └─────────────┘
 
 panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
 local-first  •  consent-gated  •  secret-redacted  •  user-deletable

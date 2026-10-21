@@ -1,37 +1,32 @@
 # panther-intent-capture
 
 ```
-                  ___
-                _(   _)_
-               /       \
-              |  o   o  |   eyes — observe
-              |    >    |   nose
-              |   ---   |   mouth
-               \  ___  /
-                \/   \/
-                 |   |
-      ___________|   |___________
-     /                           \
-    |        ___________          |
-    |       /           \         |
-    |      |             |        |
-     \     |             |     /
-      \    |             |    /
-       \   |             |   /
-        \  |             |  /
-         \ |             | /
-          |               |
-         /                 \
-        |                   |
-         \                 /
-          |               |
-         /   \         /   \
-        |     |       |     |
-        \     |       |     /
-         |    |       |    |
-         |   /         \   |
-         \__/           \__/
-       front paw      back paw
+         ___
+        /   \
+       /  _  \
+      | (o o) |   watching browser
+      |   ^   |
+       \  -  /
+      /   |   \
+     /    |    \
+    |     |     |
+    |     |     |
+   /      |      \
+  /       |       \
+ |   /\   |   /\   |
+ |  /  \  |  /  \  |
+|  |    ||    |    |
+|  |    ||    |    |
+ \  \   ||   /  /
+  \  \__||__/  /
+   \__________/
+   front paw  back paw
+
+   ┌─────────────┐
+   │   BROWSER   │
+   │  PAGE       │
+   │  CONTENT    │
+   └─────────────┘
 ```
 
 > Decompose intent on a website or portal. Turn that intelligence into tickets, with screenshots, audio, and video — so coding agents can take action based on what was captured.
