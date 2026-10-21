@@ -1,0 +1,101 @@
+// Pure presentation model. A saved receipt or cached capture is never a heartbeat.
+export const STALE_AFTER_MS = 8000;
+const POWER_STATES = new Set(["off", "on", "starting", "stopping", "error"]);
+const TERMINAL_JOBS = new Set(["delivered", "blocked", "cancelled"]);
+const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const text = value => typeof value === "string" ? value.slice(0, 600) : "";
+const time = value => Number.isFinite(value) && value > 0 ? value : null;
+
+export function monitorView(snapshot = {}, context = {}) {
+  const checkedAt = time(context.checkedAt);
+  const now = Number.isFinite(context.now) ? context.now : Date.now();
+  const fresh = context.connected === true && checkedAt !== null && now - checkedAt <= STALE_AFTER_MS;
+  const power = context.pendingPower || (fresh && POWER_STATES.has(snapshot.power?.state) ? snapshot.power.state : "unknown");
+  const on = power === "on";
+  const session = snapshot.session || null;
+  const result = snapshot.result || null;
+  // A new capture owns the current activity, even when an old result is retained.
+  const job = !session && result?.automationPolicy ? result.automation : null;
+  const paused = session?.powerPaused === true || (!session && result?.powerPaused === true);
+  const retained = !!session || !!result;
+  const source = session || result || {};
+  const sourceError = text(session?.error || (!session && (result?.error || job?.error)));
+  let activity = "Idle", detail = "Choose a webpage, then use Panther’s toolbar popup to consent and start capture.";
+  let tone = "quiet";
+
+  if (power === "unknown" || power === "error") {
+    activity = "Unknown";
+    detail = "Current activity cannot be confirmed. Saved counts below are not live progress.";
+    tone = "warning";
+  } else if (!on) {
+    detail = power === "off" ? "The browser-controlled backend is off. Nothing starts automatically." :
+      power === "starting" ? "Starting the backend only. Capture does not start automatically." :
+      "Stopping capture and remaining automatic delivery. An already submitted request may finish.";
+  } else if (paused) {
+    detail = "Previous work is retained, not running. Use the toolbar popup to review it; nothing resumes automatically.";
+  } else if (session?.cancellationConfirmed) {
+    activity = "Cancelled"; detail = "Automatic delivery was cancelled. Captured evidence is retained.";
+  } else if (sourceError || session?.cancelRequested || (!session && result?.cancelRequested)) {
+    activity = "Blocked"; tone = "warning";
+    detail = session?.cancelRequested || (!session && result?.cancelRequested) ? "Cancellation is not yet confirmed. Existing or in-flight tickets cannot be undone." : "This session needs attention. Use the toolbar popup to inspect or recover it.";
+  } else if (session) {
+    if (snapshot.status === "recording") {
+      activity = "Capturing"; tone = "active";
+      detail = "Recording interactions in your chosen tab. Event counts should increase as you use that page.";
+    } else if (snapshot.status === "saving") {
+      activity = "Saving"; tone = "active"; detail = "Saving captured evidence to the local backend.";
+    } else {
+      activity = "Blocked"; tone = "warning"; detail = "Capture is retained in this browser. Open the toolbar popup to inspect the pending upload.";
+    }
+  } else if (result?.automationPolicy) {
+    const states = {
+      queued: ["Generating", "Ticket generation is queued.", "active"],
+      generating: ["Generating", "Preparing reviewable tickets from the saved capture.", "active"],
+      delivering: ["Delivering", "Sending opted-in tickets and checking delivery receipts.", "active"],
+      retry_wait: ["Blocked", "Delivery is waiting for a retry. No successful delivery is implied.", "warning"],
+      delivered: ["Ready", "Ticket delivery completed at the recorded check time. Panther does not implement the work.", "ready"],
+      blocked: ["Blocked", "Automatic delivery is blocked. Review the saved result before taking another action.", "warning"],
+      cancelled: ["Cancelled", "Remaining automatic delivery was cancelled. Existing tickets are unchanged.", "quiet"]
+    };
+    [activity, detail, tone] = states[job?.status] || ["Unknown", "No confirmed delivery status is available.", "warning"];
+  } else if (snapshot.status === "generating") {
+    activity = "Generating"; tone = "active"; detail = "Generating reviewable drafts from the saved capture.";
+  } else if (snapshot.status === "ready" && result) {
+    activity = "Ready"; tone = "ready"; detail = "Drafts are ready to review. They have not been sent to another system.";
+  } else if (snapshot.status === "error") {
+    activity = "Blocked"; tone = "warning"; detail = "The saved result needs attention. Use the toolbar popup to inspect it.";
+  }
+
+  const sessionAutomatic = !!session?.automation && !session.automationWithdrawn;
+  const resultAutomatic = !session && !!result?.automationPolicy;
+  const cancellationPending = session?.cancelRequested || (!session && result?.cancelRequested);
+  const cancellable = sessionAutomatic || (resultAutomatic && (!TERMINAL_JOBS.has(job?.status) || !!result.error || cancellationPending));
+  const title = {off: "Panther is off", on: "Panther is on", starting: "Turning on…", stopping: "Turning off…", error: "Runtime needs attention", unknown: "Status unknown"}[power];
+
+  return {
+    power, title, on, fresh, checkedAt, activity, detail, tone,
+    runtimeHelp: on ? "Native helper confirms a running backend process. This is not a backend or destination health check." :
+      power === "off" ? "No capture or automatic delivery starts while Panther is off." :
+      power === "unknown" ? "Connection to the extension is unconfirmed. Do not treat the last known On state as live." :
+      power === "error" ? "The runtime could not confirm its state. Turn off remains available." :
+      "Power controls stay separate from capture and ticket work.",
+    historical: !on || paused,
+    countsHeading: !on || paused ? "Retained information" : session ? "Current capture" : result ? "Saved result" : "This session",
+    events: count(source.eventCount), screenshots: count(source.screenshotCount),
+    drafts: count(result?.automationPolicy ? result?.automation?.ticket_count : result?.ticketCount),
+    delivered: count(result?.automation?.delivered_count), ticketTotal: count(result?.automation?.ticket_count),
+    hasResult: !!result, hasReceipts: !!result?.automationPolicy,
+    resultHistorical: !!session || !on || paused,
+    stage: text(result?.automation?.stage), receiptCheckedAt: time(result?.automationCheckedAt),
+    error: text(context.connectionError || snapshot.power?.error || context.operationError || sourceError),
+    warning: text(session?.warning || (!session && result?.warning)),
+    showOn: ["off", "error", "unknown"].includes(power),
+    offDisabled: power === "off" || power === "stopping",
+    canStop: on && !paused && snapshot.status === "recording" && !!session,
+    stopLabel: sessionAutomatic ? "Stop & deliver tickets" : "Stop & generate drafts",
+    canCancel: on && !paused && cancellable,
+    cancelLabel: cancellationPending ? "Check cancellation" : "Cancel remaining delivery",
+    canReview: on && !!result?.id,
+    retained
+  };
+}

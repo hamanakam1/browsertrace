@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panther status</title>
+  <link rel="stylesheet" href="monitor.css">
+</head>
+<body>
+  <header class="power-panel" aria-label="Panther runtime controls">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><span>Panther <span class="brand-subtitle">/ status</span></span></div>
+    <div class="power-heading"><span id="powerDot" class="power-dot" aria-hidden="true"></span><h1 id="powerStatus" aria-live="polite">Checking Panther…</h1></div>
+    <div class="power-actions">
+      <button id="turnOnBtn" class="button primary" hidden>Turn Panther on</button>
+      <button id="turnOffBtn" class="button danger">Turn Panther off</button>
+    </div>
+    <p id="runtimeHelp" class="small">Waiting for a confirmed runtime status.</p>
+  </header>
+  <main>
+    <section class="activity-card" aria-label="Current activity">
+      <div class="section-heading"><h2>Current activity</h2><span id="activity" class="activity-label" role="status">Unknown</span></div>
+      <p id="activityDetail">Checking the extension. This window does not start capture.</p>
+      <p id="operationStatus" class="small" role="status" hidden></p>
+      <p id="connectionStatus" class="freshness">No confirmed status yet.</p>
+      <p id="error" class="notice error" role="alert" hidden></p>
+      <p id="warning" class="notice warning" role="status" hidden></p>
+    </section>
+    <section class="evidence-card" aria-label="Captured evidence and results">
+      <h2 id="countsHeading">Retained information</h2>
+      <dl class="counts"><div><dt>Events</dt><dd id="eventCount">0</dd></div><div><dt>Screenshots</dt><dd id="screenshotCount">0</dd></div></dl>
+      <p id="historyNote" class="small" hidden>Retained information is historical, not current activity.</p>
+      <div id="resultSummary" class="result-summary" hidden>
+        <p id="draftSummary"></p>
+        <p id="receiptSummary" class="small" hidden></p>
+        <p id="receiptTime" class="small" hidden></p>
+      </div>
+    </section>
+    <section class="session-actions" aria-label="Session controls">
+      <button id="stopBtn" class="button secondary" hidden>Stop &amp; generate drafts</button>
+      <button id="cancelBtn" class="button outline" hidden>Cancel remaining delivery</button>
+      <button id="reviewBtn" class="button secondary" hidden>Review saved result</button>
+      <p id="captureHelp" class="small">To start capture, choose a webpage and open Panther from that browser’s toolbar. Consent and Start are always explicit.</p>
+      <p class="small">Stop saves this session and leaves Panther on. Off cancels remaining work; an already submitted request may still finish.</p>
+    </section>
+    <footer>
+      <p>Closing this window does not turn Panther off. It is a normal browser window, not an always-on-top overlay.</p>
+      <p>Intent → reviewable tickets. Never work execution.</p>
+    </footer>
+  </main>
+  <script type="module" src="monitor.js"></script>
+</body>
+</html>

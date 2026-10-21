@@ -1,0 +1,53 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17312b; background: #f4f7f4; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; font-size: 13px; line-height: 1.45; }
+[hidden] { display: none !important; }
+button { font: inherit; }
+.power-panel { position: sticky; top: 0; z-index: 2; padding: 16px 18px 12px; background: #fff; border-bottom: 1px solid #cedbd3; box-shadow: 0 3px 12px #17312b09; }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 750; letter-spacing: -.2px; }
+.brand-mark { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; background: #173d30; color: #e3f3b7; font-size: 16px; }
+.brand-subtitle { color: #5e6e66; font-weight: 400; }
+.power-heading { display: flex; align-items: center; gap: 9px; margin: 12px 0; }
+h1 { font-size: 22px; line-height: 1.15; letter-spacing: -.65px; margin: 0; overflow-wrap: anywhere; }
+.power-dot { width: 9px; height: 9px; flex: 0 0 auto; background: #78847d; border-radius: 50%; }
+.power-dot[data-state="on"] { background: #257d4d; box-shadow: 0 0 0 4px #e5f1e7; }
+.power-dot[data-state="unknown"], .power-dot[data-state="error"], .power-dot[data-state="starting"], .power-dot[data-state="stopping"] { background: #946000; }
+.power-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.button { min-height: 42px; border: 1px solid transparent; border-radius: 8px; padding: 10px 12px; font-weight: 650; cursor: pointer; line-height: 1.2; }
+.power-actions .button { flex: 1 1 140px; }
+.primary { background: #215d3f; color: white; }
+.danger { background: #aa2c30; color: white; }
+.secondary { background: #e2eae3; color: #214935; border-color: #c7d7ca; }
+.outline { background: #fff; color: #8d3032; border-color: #e0bfc0; }
+.button:hover:not(:disabled) { filter: brightness(.95); }
+.button:focus-visible { outline: 3px solid #296bce; outline-offset: 3px; }
+.button:disabled { cursor: default; opacity: .55; }
+.small { font-size: 11px; line-height: 1.5; color: #53645a; margin: 8px 0 0; overflow-wrap: anywhere; }
+main { padding: 12px 14px 14px; }
+section { margin-bottom: 10px; }
+.activity-card, .evidence-card { padding: 12px 13px; border: 1px solid #d5dfd7; border-radius: 10px; background: #fff; }
+h2 { font-size: 11px; line-height: 1.4; font-weight: 700; text-transform: uppercase; letter-spacing: .65px; color: #596a5f; margin: 0; }
+.section-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.activity-label { padding: 3px 8px; border-radius: 5px; background: #edf0ec; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.activity-label[data-tone="active"] { color: #1d603b; background: #e3f0e6; }
+.activity-label[data-tone="warning"] { color: #805300; background: #fff0d2; }
+.activity-label[data-tone="ready"] { color: #185044; background: #dcf0e8; }
+#activityDetail { margin: 8px 0 0; overflow-wrap: anywhere; }
+.freshness { margin: 9px 0 0; color: #5c6b62; font-size: 10px; }
+.freshness[data-stale="true"] { color: #925d00; font-weight: 600; }
+.counts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 0; }
+.counts div { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.counts dt { color: #58685e; font-size: 12px; }
+.counts dd { font-size: 21px; line-height: 1; font-weight: 650; margin: 0; font-variant-numeric: tabular-nums; }
+.result-summary { border-top: 1px solid #e4eae4; margin-top: 11px; padding-top: 8px; }
+.result-summary p { margin-top: 4px; margin-bottom: 0; overflow-wrap: anywhere; }
+#draftSummary { font-weight: 650; }
+.notice { border-radius: 6px; padding: 8px; overflow-wrap: anywhere; font-size: 12px; }
+.error { background: #fcecec; color: #8b2c30; }
+.warning { background: #fff4da; color: #795410; }
+.session-actions { display: grid; gap: 7px; }
+.session-actions .small { margin: 0; padding: 0 2px; }
+footer { border-top: 1px solid #d5dfd7; padding-top: 8px; font-size: 10px; line-height: 1.5; color: #5f6b63; }
+footer p { margin: 0 0 4px; }
+@media (max-width: 340px) { .power-panel { padding: 13px 12px 10px; } main { padding: 10px; } h1 { font-size: 21px; } .power-actions .button { flex-basis: 120px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

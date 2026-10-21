@@ -29,13 +29,8 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 ## Next: qualify the complete user workflow
 
 - Exercise the unpacked extension in fresh Chrome and Edge profiles, including same-origin reloads, SPA routes, tab changes, service-worker suspension, and browser restart.
-<<<<<<< Updated upstream
-- Verify the popup and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
-- Run consented local ticket service captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
-=======
 - Verify the toolbar popup, persistent status window, and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
-- Run consented AI Dashboard captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
->>>>>>> Stashed changes
+- Run consented local ticket service captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
 - Measure draft usefulness with representative examples: accurate evidence, clear expected behavior, useful acceptance criteria, and minimal manual correction.
 - Test an explicitly configured local model and report model/version, errors, latency, and whether any media was analyzed.
 - Establish a small, published compatibility matrix from actual website/browser checks.
