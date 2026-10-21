@@ -125,3 +125,4 @@ export function liveView(snapshot = {}, state = {}, now = Date.now()) {
     coverage: recentEvents.length ? `Showing ${recentEvents.length} recent events of ${events}. Evidence numbers refer to this capture.` : ""
   };
 }
+
