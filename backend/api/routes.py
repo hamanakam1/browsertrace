@@ -1,347 +1,400 @@
-"""HTTP API route handlers for the extension backend."""
-
+"""Loopback API for consented captures, reviewable drafts and explicit delivery."""
 from __future__ import annotations
 
+import base64
 import json
-import os
-import time
-import uuid
+import math
+import mimetypes
+from email import policy
+from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from urllib.parse import urlsplit
 
-from storage import (
-    create_recording,
-    delete_recording,
-    get_inference_result,
-    get_recording,
-    list_recordings,
-    save_inference_result,
-)
-from inference import run_inference
+import storage
 from redaction import sanitize_events
-from tickets import decompose_session, save_tickets, load_tickets
+from tickets import generate_drafts, load_tickets, save_tickets, DraftGenerationError
+from integrations import dashboard_status, export_bundle, preview_ticket, submit_ticket
 
-UPLOAD_LIMIT = 64 * 1024 * 1024  # 64MB max upload
-
-
-def _parse_body(handler: BaseHTTPRequestHandler) -> bytes:
-    length = int(handler.headers.get("Content-Length", 0))
-    if length > UPLOAD_LIMIT:
-        raise ValueError("Request body too large")
-    return handler.rfile.read(length)
+UPLOAD_LIMIT = 64 * 1024 * 1024
+UI_ROOT = Path(__file__).resolve().parents[2] / "extension"
+UI_FILES = {"options/options.html", "options/options.js", "options/options.css", "shared/constants.js"}
 
 
-def _json(handler: BaseHTTPRequestHandler, code: int, payload: Any) -> None:
-    body = json.dumps(payload).encode("utf-8")
+def _origin(handler):
+    origin = handler.headers.get("Origin", "")
+    try:
+        parsed = urlsplit(origin)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            return None
+        if parsed.scheme == "chrome-extension" and parsed.netloc and not parsed.path:
+            return origin
+        if (parsed.scheme in ("http", "https") and parsed.hostname in ("127.0.0.1", "localhost", "::1")
+                and not parsed.path and parsed.port == handler.server.server_port):
+            return origin
+    except ValueError:
+        return None
+    return None
+
+
+def _headers(handler):
+    allowed = _origin(handler)
+    if allowed:
+        handler.send_header("Access-Control-Allow-Origin", allowed)
+        handler.send_header("Vary", "Origin")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+
+
+def _json(handler, code, payload):
+    body = json.dumps(payload, allow_nan=False).encode()
     handler.send_response(code)
-    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    _headers(handler)
     handler.end_headers()
     handler.wfile.write(body)
 
 
-def _route(method: str, path: str) -> Optional[Tuple[str, Dict[str, str]]]:
-    """Match a route. Returns (handler_name, path_params) or None."""
-    parts = [p for p in path.split("?")[0].split("/") if p]
-    if method == "POST" and parts == ["api", "extension", "record"]:
-        return ("record", {})
-    if method == "GET" and parts == ["api", "extension", "recordings"]:
-        return ("list_recordings", {})
-    if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "recordings"]:
-        return ("get_recording", {"id": parts[3]})
-    if method == "GET" and len(parts) == 5 and parts[:3] == ["api", "extension", "recordings"] and parts[4] == "video":
-        return ("get_video", {"id": parts[3]})
-    if method == "DELETE" and len(parts) == 4 and parts[:3] == ["api", "extension", "recordings"]:
-        return ("delete_recording", {"id": parts[3]})
-    if method == "POST" and len(parts) == 4 and parts[:3] == ["api", "extension", "infer"]:
-        return ("infer", {"id": parts[3]})
-    if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "infer"]:
-        return ("get_inference", {"id": parts[3]})
-    if method == "POST" and len(parts) == 4 and parts[:3] == ["api", "extension", "tickets"]:
-        return ("decompose_tickets", {"id": parts[3]})
-    if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "tickets"]:
-        return ("get_tickets", {"id": parts[3]})
-    if method == "GET" and parts == ["api", "extension", "health"]:
-        return ("health", {})
-    return None
-
-
-def handle_request(handler: BaseHTTPRequestHandler) -> None:
-    method = handler.command
-    path = handler.path
-    matched = _route(method, path)
-    if not matched:
-        _json(handler, 404, {"error": "not found"})
-        return
-
-    name, params = matched
-
+def _parse_body(handler):
     try:
-        if name == "health":
-            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend"})
-            return
-
-        if name == "record":
-            # multipart form: video (file), events (json string), tabId, startTime, endTime, extensionId
-            content_type = handler.headers.get("Content-Type", "")
-            if "multipart/form-data" not in content_type:
-                _json(handler, 400, {"error": "expected multipart/form-data"})
-                return
-            fields, files = _parse_multipart(handler)
-            video_file = files.get("video")
-            if not video_file:
-                _json(handler, 400, {"error": "missing video"})
-                return
-            events_raw = fields.get("events", "[]")
-            try:
-                events = json.loads(events_raw)
-            except json.JSONDecodeError:
-                events = []
-            events = sanitize_events(events)
-            screenshots_raw = fields.get("screenshots", "[]")
-            try:
-                screenshots = json.loads(screenshots_raw)
-            except json.JSONDecodeError:
-                screenshots = []
-            tab_id = int(fields.get("tabId", "0") or 0)
-            start_time = float(fields.get("startTime", "0") or 0)
-            end_time = float(fields.get("endTime", str(time.time())) or time.time())
-            extension_id = fields.get("extensionId", "unknown")
-
-            # write video + events + screenshots to disk
-            rec_dir = os.path.join(os.path.expanduser("~"), ".panther-intent-capture", "recordings")
-            os.makedirs(rec_dir, exist_ok=True)
-            rec_id = uuid.uuid4().hex
-            video_name = f"{rec_id}.webm"
-            events_name = f"{rec_id}.json"
-            screenshots_name = f"{rec_id}_screenshots.json"
-            video_path = os.path.join(rec_dir, video_name)
-            events_path = os.path.join(rec_dir, events_name)
-            screenshots_path = os.path.join(rec_dir, screenshots_name)
-            with open(video_path, "wb") as f:
-                f.write(video_file)
-            with open(events_path, "w") as f:
-                json.dump(events, f)
-            with open(screenshots_path, "w") as f:
-                json.dump(screenshots, f)
-
-            recording_id = create_recording(
-                tab_id=tab_id,
-                start_time=start_time,
-                end_time=end_time,
-                event_count=len(events) if isinstance(events, list) else 0,
-                screenshot_count=len(screenshots) if isinstance(screenshots, list) else 0,
-                extension_id=extension_id,
-                video_path=video_path,
-                events_path=events_path,
-                screenshots_path=screenshots_path,
-                video_size=os.path.getsize(video_path),
-            )
-            _json(handler, 201, {"id": recording_id, "event_count": len(events) if isinstance(events, list) else 0})
-            return
-
-        if name == "list_recordings":
-            _json(handler, 200, {"recordings": list_recordings()})
-            return
-
-        if name == "get_recording":
-            entry = get_recording(params["id"])
-            if not entry:
-                _json(handler, 404, {"error": "recording not found"})
-                return
-            _json(handler, 200, entry)
-            return
-
-        if name == "get_video":
-            entry = get_recording(params["id"])
-            if not entry:
-                _json(handler, 404, {"error": "recording not found"})
-                return
-            video_path = entry.get("video_path", "")
-            if not video_path or not os.path.exists(video_path):
-                _json(handler, 404, {"error": "video file not found"})
-                return
-            _serve_range(handler, video_path, "video/webm")
-            return
-
-        if name == "delete_recording":
-            ok = delete_recording(params["id"])
-            if not ok:
-                _json(handler, 404, {"error": "recording not found"})
-                return
-            _json(handler, 200, {"deleted": True})
-            return
-
-        if name == "infer":
-            entry = get_recording(params["id"])
-            if not entry:
-                _json(handler, 404, {"error": "recording not found"})
-                return
-            # load events
-            events_path = entry.get("events_path", "")
-            events = []
-            if events_path and os.path.exists(events_path):
-                try:
-                    events = json.loads(open(events_path).read())
-                except (json.JSONDecodeError, OSError):
-                    events = []
-            result = run_inference(entry.get("video_path", ""), events)
-            result_id = save_inference_result(params["id"], result)
-            _json(handler, 200, {"id": result_id, "result": result})
-            return
-
-        if name == "get_inference":
-            result = get_inference_result(params["id"])
-            if not result:
-                _json(handler, 404, {"error": "inference result not found"})
-                return
-            _json(handler, 200, result)
-            return
-
-        if name == "decompose_tickets":
-            entry = get_recording(params["id"])
-            if not entry:
-                _json(handler, 404, {"error": "recording not found"})
-                return
-            # Check if tickets already exist for this recording.
-            existing = load_tickets(params["id"])
-            if existing:
-                _json(handler, 200, {"id": existing["id"], "tickets": existing["data"]["tickets"], "cached": True})
-                return
-            events_path = entry.get("events_path", "")
-            events = []
-            if events_path and os.path.exists(events_path):
-                try:
-                    events = json.loads(open(events_path).read())
-                except (json.JSONDecodeError, OSError):
-                    events = []
-            data = decompose_session(entry.get("video_path", ""), events)
-            ticket_id = save_tickets(params["id"], data)
-            _json(handler, 200, {"id": ticket_id, "tickets": data["tickets"], "cached": False})
-            return
-
-        if name == "get_tickets":
-            existing = load_tickets(params["id"])
-            if not existing:
-                _json(handler, 404, {"error": "tickets not found for this recording"})
-                return
-            _json(handler, 200, {"id": existing["id"], "tickets": existing["data"]["tickets"], "cached": True})
-            return
-
-    except ValueError as exc:
-        _json(handler, 400, {"error": str(exc)})
-        return
-    except Exception as exc:  # noqa: BLE001
-        _json(handler, 500, {"error": "internal error", "detail": str(exc)})
-        return
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        raise ValueError("Invalid Content-Length") from None
+    if not 0 <= length <= UPLOAD_LIMIT:
+        raise ValueError("Request body exceeds the 64 MiB limit")
+    body = handler.rfile.read(length)
+    if len(body) != length:
+        raise ValueError("Incomplete request body")
+    return body
 
 
-def _parse_multipart(handler: BaseHTTPRequestHandler) -> Tuple[Dict[str, str], Dict[str, bytes]]:
-    """Minimal multipart/form-data parser."""
-    content_type = handler.headers.get("Content-Type", "")
-    boundary = None
-    for part in content_type.split(";"):
-        part = part.strip()
-        if part.startswith("boundary="):
-            boundary = part[len("boundary="):].strip('"')
-            break
-    if not boundary:
-        raise ValueError("missing boundary")
+def _body_json(handler):
+    if handler.headers.get_content_type() != "application/json":
+        raise ValueError("Expected application/json")
+    try:
+        data = json.loads(_parse_body(handler) or b"{}")
+    except (ValueError, UnicodeError):
+        raise ValueError("Invalid JSON") from None
+    if not isinstance(data, dict):
+        raise ValueError("Expected a JSON object")
+    return data
 
-    body = _parse_body(handler)
-    delim = ("--" + boundary).encode()
-    fields: Dict[str, str] = {}
-    files: Dict[str, bytes] = {}
 
-    segments = body.split(delim)
-    for seg in segments:
-        seg = seg.strip()
-        if not seg or seg == b"--":
-            continue
-        if seg.endswith(b"--"):
-            seg = seg[:-2].strip()
-        header_end = seg.find(b"\r\n\r\n")
-        if header_end < 0:
-            continue
-        header_block = seg[:header_end].decode("utf-8", errors="replace")
-        data = seg[header_end + 4:]
-        if data.endswith(b"\r\n"):
-            data = data[:-2]
-
-        name = None
-        filename = None
-        for line in header_block.split("\r\n"):
-            line = line.strip()
-            if line.lower().startswith("content-disposition:"):
-                for token in line.split(";"):
-                    token = token.strip()
-                    if token.startswith("name="):
-                        name = token[len("name="):].strip('"')
-                    elif token.startswith("filename="):
-                        filename = token[len("filename="):].strip('"')
-
-        if filename is None:
-            fields[name] = data.decode("utf-8", errors="replace")
+def _parse_multipart(handler):
+    """Use the stdlib MIME parser; never strip binary recording bytes."""
+    header = handler.headers.get("Content-Type", "")
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: " + header.encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + _parse_body(handler)
+    )
+    if not message.is_multipart():
+        raise ValueError("Invalid multipart body")
+    fields, files = {}, {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name or name in fields or name in files:
+            raise ValueError("Missing or duplicate multipart field")
+        value = part.get_payload(decode=True) or b""
+        if part.get_filename() is not None:
+            files[name] = value
         else:
-            files[name] = data
-
+            fields[name] = value.decode("utf-8")
     return fields, files
 
 
-def _parse_range(range_header: str, file_size: int):
-    """Parse a Range header like 'bytes=0-499' into (start, end) inclusive."""
-    if not range_header or not range_header.lower().startswith("bytes="):
-        return None
-    spec = range_header[6:]
-    if "-" not in spec:
-        return None
-    start_s, end_s = spec.split("-", 1)
-    start = int(start_s) if start_s else None
-    end = int(end_s) if end_s else None
-    if start is None and end is not None:
-        # suffix range: bytes=-500 -> last 500 bytes
-        start = max(0, file_size - end)
-        end = file_size - 1
-    elif start is not None and end is None:
-        end = file_size - 1
-    elif start is not None and end is not None:
-        end = min(end, file_size - 1)
+def _text(value, limit):
+    if not isinstance(value, str):
+        raise ValueError("Expected text")
+    if len(value) > limit:
+        raise ValueError(f"Text exceeds {limit} characters")
+    return value
+
+
+def _safe_url(value):
+    value = _text(value, 8192)
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Capture URL must be HTTP or HTTPS")
+    route = parsed.fragment if all(c.isalnum() or c in "-_/." for c in parsed.fragment) else ""
+    host = parsed.hostname
+    if ":" in host:
+        host = f"[{host}]"
+    if parsed.port:
+        host += f":{parsed.port}"
+    return f"{parsed.scheme}://{host}{parsed.path}" + (f"#{route}" if route else "")
+
+
+def _public_record(entry):
+    return {key: value for key, value in entry.items() if not key.endswith("_path") and key != "inference"}
+
+
+def _record(handler):
+    video = b""
+    if handler.headers.get_content_type() == "multipart/form-data":
+        data, files = _parse_multipart(handler)
+        video = files.get("video", b"")
+        for key in ("events", "screenshots"):
+            data[key] = json.loads(data.get(key, "[]"))
+        data["consent"] = data.get("consent") == "true"
+        data["screenshotsConsent"] = data.get("screenshotsConsent") == "true"
     else:
-        return None
-    if start is None or start > file_size - 1 or start > end:
-        return None
-    return start, end
+        data = _body_json(handler)
+    if data.get("consent") is not True:
+        raise ValueError("Explicit session consent is required")
+    events = data.get("events", [])
+    screenshots = data.get("screenshots", [])
+    if not isinstance(events, list) or len(events) > 5000 or any(not isinstance(e, dict) for e in events):
+        raise ValueError("Expected at most 5000 event objects")
+    events = sanitize_events(events)
+    if not isinstance(screenshots, list) or len(screenshots) > 20:
+        raise ValueError("Expected at most 20 screenshots")
+    if screenshots and data.get("screenshotsConsent") is not True:
+        raise ValueError("Screenshot consent is required; pixels are not automatically redacted")
+    clean_screenshots = []
+    for shot in screenshots:
+        if not isinstance(shot, dict) or not isinstance(shot.get("dataUrl"), str):
+            raise ValueError("Invalid screenshot")
+        encoded = shot["dataUrl"]
+        prefix = "data:image/jpeg;base64,"
+        if not encoded.startswith(prefix) or len(encoded) > 5_000_000:
+            raise ValueError("Screenshots must be bounded JPEG data URLs")
+        try:
+            raw = base64.b64decode(encoded[len(prefix):], validate=True)
+            if not raw.startswith(b"\xff\xd8"):
+                raise ValueError("Invalid JPEG")
+        except ValueError:
+            raise ValueError("Invalid screenshot encoding") from None
+        timestamp = shot.get("ts")
+        if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
+                or not math.isfinite(timestamp) or timestamp <= 0):
+            raise ValueError("Screenshot timestamp must be epoch milliseconds")
+        clean_screenshots.append({"ts": timestamp, "dataUrl": encoded})
+    screenshots = clean_screenshots
+    session_id = _text(data.get("sessionId", ""), 200)
+    extension_id = _text(data.get("extensionId", "unknown"), 200)
+    if not session_id:
+        raise ValueError("sessionId is required for retry-safe capture")
+    try:
+        start = float(data["startTime"]) / 1000
+        end = float(data["endTime"]) / 1000
+        tab = int(data.get("tabId", 0))
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("Expected startTime/endTime in epoch milliseconds and numeric tabId") from None
+    if not math.isfinite(start) or not math.isfinite(end) or start <= 0 or end < start:
+        raise ValueError("Invalid capture timestamps")
+    url = _safe_url(data.get("url", ""))
+    title = _text(data.get("title", ""), 500)
+    goal = _text(data.get("goal", ""), 2000)
+    with storage.DATA_LOCK:
+        rid = storage.recording_id_for_session(extension_id, session_id)
+        existing = storage.get_recording(rid)
+        if existing:
+            _json(handler, 200, {"id": rid, "event_count": existing["event_count"], "cached": True})
+            return
+        storage.ensure_dirs()
+        video_path = storage.RECORDINGS_DIR / f"{rid}.webm" if video else None
+        if video_path:
+            with open(video_path, "xb") as output:
+                output.write(video)
+            video_path.chmod(0o600)
+        events_path = storage.EVENTS_DIR / f"{rid}.json"
+        shots_path = storage.RECORDINGS_DIR / f"{rid}_screenshots.json"
+        storage.write_json(events_path, events)
+        storage.write_json(shots_path, screenshots)
+        storage.create_recording(
+            recording_id=rid, session_id=session_id, tab_id=tab, start_time=start, end_time=end,
+            event_count=len(events), screenshot_count=len(screenshots), extension_id=extension_id,
+            video_path=video_path, events_path=events_path, screenshots_path=shots_path,
+            video_size=len(video), url=url, title=title, goal=goal,
+            metadata={"consent": True, "screenshots_consent": bool(screenshots), "capture_mode": "video" if video else "events"},
+        )
+    _json(handler, 201, {"id": rid, "event_count": len(events), "cached": False})
 
 
-def _serve_range(handler: BaseHTTPRequestHandler, path: str, content_type: str) -> None:
-    """Serve a file with HTTP range request support (for video seeking)."""
-    file_size = os.path.getsize(path)
-    range_header = handler.headers.get("Range")
+def _load_events(entry):
+    path = entry.get("events_path")
+    return json.loads(Path(path).read_text()) if path else []
 
-    start = 0
-    end = file_size - 1
-    status = 200
-    content_range = None
 
-    if range_header:
-        parsed = _parse_range(range_header, file_size)
-        if parsed:
-            start, end = parsed
-            status = 206
-            content_range = f"bytes {start}-{end}/{file_size}"
+def _draft_response(saved, cached):
+    _check_draft_revision(saved)
+    return {"id": saved["id"], **saved["data"], "cached": cached}
 
-    length = end - start + 1
-    with open(path, "rb") as f:
-        f.seek(start)
-        data = f.read(length)
 
-    handler.send_response(status)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Accept-Ranges", "bytes")
-    handler.send_header("Content-Length", str(length))
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    if content_range:
-        handler.send_header("Content-Range", content_range)
+def _check_draft_revision(saved):
+    if saved and saved["data"].get("mode") == "ai" and saved["data"].get("generation_revision", 0) < 2:
+        raise ValueError("This older AI draft needs regeneration to distinguish observed evidence from proposals")
+
+
+def _reviewed_ticket(entry, data):
+    saved = load_tickets(entry["id"])
+    if not saved:
+        raise ValueError("Generate drafts before previewing delivery")
+    _check_draft_revision(saved)
+    ticket = next((dict(t) for t in saved["data"]["tickets"] if t["id"] == data.get("ticket_id")), None)
+    if ticket is None:
+        raise ValueError("Unknown draft ticket")
+    patch = data.get("patch", {})
+    if not isinstance(patch, dict) or set(patch) - {"title", "description", "acceptance_criteria"}:
+        raise ValueError("Only title, description and acceptance criteria can be edited")
+    for key in ("title", "description"):
+        if key in patch:
+            ticket[key] = _text(patch[key], 200 if key == "title" else 2000).strip()
+    if not ticket.get("title"):
+        raise ValueError("Ticket title is required")
+    if "acceptance_criteria" in patch:
+        values = patch["acceptance_criteria"]
+        if not isinstance(values, list) or len(values) > 10:
+            raise ValueError("Expected up to 10 acceptance criteria")
+        ticket["acceptance_criteria"] = [_text(v, 500) for v in values if v]
+    return ticket
+
+
+def _serve_ui(handler, path):
+    if path == "/":
+        handler.send_response(302)
+        handler.send_header("Location", "/ui/options/options.html")
+        handler.end_headers()
+        return True
+    if not path.startswith("/ui/"):
+        return False
+    relative = path[4:]
+    if relative not in UI_FILES:
+        _json(handler, 404, {"error": "not found"})
+        return True
+    body = (UI_ROOT / relative).read_bytes()
+    handler.send_response(200)
+    handler.send_header("Content-Type", mimetypes.guess_type(relative)[0] or "application/octet-stream")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'self'; frame-ancestors 'none'")
+    _headers(handler)
     handler.end_headers()
-    handler.wfile.write(data)
+    handler.wfile.write(body)
+    return True
+
+
+def handle_request(handler: BaseHTTPRequestHandler):
+    try:
+        host = urlsplit("http://" + handler.headers.get("Host", "")).hostname
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            _json(handler, 403, {"error": "Loopback Host required"})
+            return
+        if handler.headers.get("Origin") and not _origin(handler):
+            _json(handler, 403, {"error": "Origin not permitted"})
+            return
+        method = handler.command
+        if method == "OPTIONS":
+            handler.send_response(204)
+            _headers(handler)
+            handler.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            handler.send_header("Access-Control-Allow-Headers", "Content-Type, X-Panther-Client")
+            handler.end_headers()
+            return
+        if method in ("POST", "DELETE") and not handler.headers.get("X-Panther-Client"):
+            _json(handler, 403, {"error": "X-Panther-Client header required"})
+            return
+        path = urlsplit(handler.path).path
+        if method == "GET" and _serve_ui(handler, path):
+            return
+        prefix = "/api/extension/"
+        if not path.startswith(prefix):
+            _json(handler, 404, {"error": "not found"})
+            return
+        parts = path[len(prefix):].strip("/").split("/")
+        if parts == ["health"] and method == "GET":
+            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": "1.0", "capabilities": ["events", "screenshots", "drafts", "json-export", "ai-dashboard"]})
+            return
+        if parts == ["record"] and method == "POST":
+            _record(handler)
+            return
+        if parts == ["recordings"] and method == "GET":
+            _json(handler, 200, {"recordings": storage.list_recordings()})
+            return
+        if parts == ["integrations", "ai-dashboard"] and method == "GET":
+            _json(handler, 200, dashboard_status())
+            return
+        integration = len(parts) == 4 and parts[:2] == ["integrations", "ai-dashboard"] and parts[2] in ("preview", "submit")
+        if not integration and (len(parts) not in (2, 3) or parts[0] not in ("recordings", "tickets", "export", "infer")):
+            _json(handler, 404, {"error": "not found"})
+            return
+        rid = parts[3] if integration else parts[1]
+        entry = storage.get_recording(rid)
+        if entry is None:
+            _json(handler, 404, {"error": "Recording not found"})
+            return
+        if integration and method == "POST":
+            data = _body_json(handler)
+            ticket = _reviewed_ticket(entry, data)
+            preview = preview_ticket(entry, ticket)
+            if parts[2] == "preview":
+                _json(handler, 200, preview)
+            elif data.get("confirmed") is not True or data.get("payload_hash") != preview["payload_hash"]:
+                _json(handler, 409, {"error": "Preview and explicitly confirm this exact ticket before sending"})
+            else:
+                result = submit_ticket(entry, ticket)
+                _json(handler, 200 if result.get("ok") else 409, result)
+            return
+        if parts[0] == "recordings":
+            if method == "DELETE" and len(parts) == 2:
+                _json(handler, 200, {"deleted": storage.delete_recording(rid)})
+            elif method == "GET" and len(parts) == 2:
+                _json(handler, 200, _public_record(entry))
+            elif method == "GET" and parts[-1] == "events":
+                _json(handler, 200, {"events": _load_events(entry)})
+            elif method == "GET" and parts[-1] == "screenshots":
+                shot_path = entry.get("screenshots_path")
+                _json(handler, 200, {"screenshots": json.loads(Path(shot_path).read_text()) if shot_path else []})
+            else:
+                _json(handler, 404, {"error": "Media playback is not supported in this capture release"})
+            return
+        if parts[0] == "tickets" and len(parts) == 3 and parts[2] == "review" and method == "POST":
+            data = _body_json(handler)
+            with storage.DATA_LOCK:
+                ticket = _reviewed_ticket(entry, data)
+                saved = load_tickets(rid)
+                saved["data"]["tickets"] = [ticket if t["id"] == ticket["id"] else t for t in saved["data"]["tickets"]]
+                save_tickets(rid, saved["data"])
+            _json(handler, 200, {"saved": True, "ticket": ticket})
+            return
+        if parts[0] == "tickets" and len(parts) == 2 and method in ("GET", "POST"):
+            saved = load_tickets(rid)
+            if method == "GET":
+                _json(handler, 200 if saved else 404, _draft_response(saved, True) if saved else {"error": "No drafts generated yet"})
+                return
+            data = _body_json(handler)
+            use_ai = data.get("use_ai", False)
+            if not isinstance(use_ai, bool):
+                raise ValueError("use_ai must be a boolean")
+            mode = "ai" if use_ai else "observed"
+            with storage.DATA_LOCK:
+                saved = load_tickets(rid, mode=mode)
+                if saved:
+                    save_tickets(rid, saved["data"])
+                    _json(handler, 200, _draft_response(saved, True))
+                    return
+            generated = generate_drafts(entry, _load_events(entry), use_ai=use_ai)
+            with storage.DATA_LOCK:
+                if not storage.get_recording(rid):
+                    raise ValueError("Recording was deleted during draft generation")
+                concurrent = load_tickets(rid, mode=mode)
+                save_tickets(rid, concurrent["data"] if concurrent else generated)
+                saved = load_tickets(rid)
+            _json(handler, 200, _draft_response(saved, False))
+            return
+        if parts[0] == "export" and len(parts) == 2 and method == "GET":
+            saved = load_tickets(rid)
+            if not saved:
+                raise ValueError("Generate drafts before exporting")
+            _check_draft_revision(saved)
+            _json(handler, 200, export_bundle(entry, saved["data"]))
+            return
+        _json(handler, 404, {"error": "not found"})
+    except DraftGenerationError as exc:
+        _json(handler, 502, {"error": str(exc), "retryable": True})
+    except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+        _json(handler, 400, {"error": str(exc)})
+    except Exception as exc:
+        _json(handler, 500, {"error": "Backend operation failed; check the local server log"})
+        handler.log_error("%s", type(exc).__name__)

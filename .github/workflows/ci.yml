@@ -9,25 +9,31 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        python: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
-
-      - name: Install backend deps
-        run: |
-          pip install --upgrade pip
-
-      - name: Run redaction unit tests (extension)
-        uses: denoland/setup-deno@v2
+          python-version: ${{ matrix.python }}
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          deno-version: v1.x
-      - run: deno test tests/redaction_test.mjs
-        working-directory: .
-
-      - name: Lint Python
-        run: |
-          python -m py_compile backend/server.py backend/api/routes.py backend/inference.py backend/storage.py backend/redaction.py
+          node-version: "22"
+      - name: Capture, consent and redaction regressions
+        run: node --test tests/*.mjs
+      - name: Storage, HTTP and dashboard adapter regressions
+        run: python -B -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build and validate extension ZIP
+        run: python scripts/package_extension.py
+      - name: Retain unpackable extension
+        if: matrix.python == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: panther-intent-capture-chromium
+          path: dist/panther-intent-capture.zip

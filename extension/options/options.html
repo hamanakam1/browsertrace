@@ -1,63 +1,40 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>panther-intent-capture — Recordings</title>
-<link rel="stylesheet" href="options.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panther · Capture review</title><link rel="stylesheet" href="options.css"></head>
 <body>
-<div class="shell">
-  <header>
-    <h1>panther-intent-capture</h1>
-    <a href="popup/popup.html" class="btn">Open Extension</a>
-  </header>
-
-  <div class="card">
-    <div class="card-header">
-      <h2>Recordings</h2>
-      <span id="count" class="badge">0</span>
-    </div>
-    <div id="empty" class="empty">No recordings yet. Start a recording from the extension popup.</div>
-    <table id="recordingsTable" style="display:none">
-      <thead>
-        <tr>
-          <th>Started</th><th>URL</th><th>Duration</th><th>Events</th><th>Screenshots</th><th>Inference</th><th>Tickets</th><th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="recordingsBody"></tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <div class="card-header">
-      <h2 id="viewTitle">Recording</h2>
-    </div>
-    <div id="viewPanel" style="display:none">
-      <div class="video-wrap">
-        <video id="recVideo" controls preload="metadata" style="max-width:100%; max-height:400px; background:#000;"></video>
-      </div>
-      <div id="viewMeta" style="margin-top:10px; font-size:12px; color:#6b7280;"></div>
-      <button class="btn btn-primary" onclick="app.closeView()">Close</button>
-    </div>
-    <div id="inferenceView" style="margin-top:16px; display:none">
-      <h3 style="font-size:14px; margin:0 0 8px 0;">Inference</h3>
-      <div id="inferenceMeta" style="font-size:12px; color:#6b7280; margin-bottom:8px;"></div>
-      <pre id="inferenceBody"></pre>
-    </div>
-    <div id="inferenceEmpty" class="empty" style="margin-top:16px;">No inference result yet.</div>
-    <div id="ticketsView" style="margin-top:16px; display:none">
-      <h3 style="font-size:14px; margin:0 0 8px 0;">Intent Tickets</h3>
-      <div id="ticketsMeta" style="font-size:12px; color:#6b7280; margin-bottom:8px;"></div>
-      <div id="ticketsBody"></div>
-    </div>
-    <div id="ticketsEmpty" class="empty" style="margin-top:16px;">No tickets yet. Click "Generate Tickets" on a recording.</div>
-  </div>
-
-  <div class="footer">
-    Local-first &middot; For self-improvement &amp; learning
-  </div>
+<main class="shell">
+<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>From activity to a clear next step.</h1></div><button id="refresh">Refresh</button></header>
+<section class="status-bar" aria-label="System status">
+<div><span class="dot" id="backendDot"></span><strong id="backendStatus">Connecting to local backend…</strong></div>
+<div id="dashboardStatus">Checking AI Dashboard…</div>
+</section>
+<p id="message" role="status" aria-live="polite">Loading captures…</p>
+<div class="workspace">
+<section class="card library"><h2>Captures <span id="count">0</span></h2><p class="muted">Start from the extension on any supported web page. Evidence drafts are prepared automatically when you stop.</p><div id="recordings"></div></section>
+<section class="card review" id="review">
+<div id="emptyReview"><h2>Review before you send.</h2><p>Choose a capture to inspect the observed steps, refine a draft, and send it to AI Dashboard or export JSON for another system.</p><p class="muted">Generated suggestions require your judgment. Capturing ordinary navigation does not prove a bug.</p></div>
+<div id="captureView" hidden>
+<div class="section-heading"><h2 id="captureTitle"></h2><button id="deleteCapture" class="danger">Delete capture</button></div>
+<p id="captureMeta" class="muted"></p><p id="captureGoal"></p>
+<div class="actions"><button id="generate">Generate evidence draft</button><button id="generateAI">Generate with local AI</button><button id="export">Export JSON</button></div>
+<p id="generationStatus" role="status" aria-live="polite"></p>
+<details><summary>Observed interactions</summary><ol id="events"></ol></details>
+<details id="screenshotsPanel" hidden><summary>Screenshots · pixels may contain private information</summary><div id="screenshots"></div></details>
+<div id="tickets"></div>
 </div>
+</section>
+</div>
+<footer>Stored on this computer · No paid inference fallback · Dashboard submissions enter backlog with autonomous execution disabled</footer>
+</main>
+<dialog id="previewDialog">
+<form method="dialog"><button class="close" aria-label="Close preview">×</button></form>
+<h2>Review AI Dashboard submission</h2>
+<p>This creates a backlog ticket with <strong>no-auto</strong> and a review fence. Sending a ticket does not authorize execution.</p>
+<div id="previewSummary"></div>
+<details><summary>Exact API payload</summary><pre id="previewBody"></pre></details><p id="previewWarnings" class="muted"></p>
+<div class="actions"><button id="confirmSend" class="primary">Send this reviewed ticket</button><button id="cancelSend">Cancel</button></div>
+<p id="deliveryStatus" role="status" aria-live="polite"></p>
+</dialog>
 <script type="module" src="options.js"></script>
-</body>
-</html>
+</body></html>

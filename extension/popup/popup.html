@@ -3,52 +3,35 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>panther-intent-capture — Record & Learn</title>
+<title>Panther Intent Capture</title>
 <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-<div class="shell">
-  <div id="backendBanner" class="banner warn" style="display:none">
-    Backend not reachable. Start it with <code>backend/start.sh</code>.
-  </div>
-  <div class="header">
-    <h1>panther-intent-capture</h1>
-    <div class="status" id="status">Idle</div>
-  </div>
-
-  <div class="card consent-card">
-    <div class="consent-row">
-      <input type="checkbox" id="consent" />
-      <label for="consent">Enable recording &amp; inference on page usage</label>
-    </div>
-    <div class="consent-row" style="margin-top:8px">
-      <input type="checkbox" id="audio" />
-      <label for="audio">Record audio with video</label>
-    </div>
-    <p class="note">Opt-in only. Works on any page you choose. Everything stays local.</p>
-  </div>
-
-  <div class="card control-card">
-    <button id="recordBtn" class="btn" disabled>Start Recording</button>
-    <button id="stopBtn" class="btn danger" disabled style="display:none">Stop Recording</button>
-    <div class="meta" id="meta"></div>
-  </div>
-
-  <div class="card log-card">
-    <h3>Consent log</h3>
-    <div id="log"></div>
-  </div>
-
-  <div class="card ticket-card">
-    <h3>Intent Tickets</h3>
-    <p class="note">Decompose recorded sessions into actionable tickets for coding agents.</p>
-    <a href="options/options.html" class="btn btn-primary" style="width:100%; text-align:center">View All Tickets</a>
-  </div>
-
-  <div class="footer">
-    Local-first &middot; For self-improvement &amp; learning
-  </div>
-</div>
+<main class="shell">
+  <header class="header"><h1>Panther</h1><div class="status" id="status" role="status">Checking…</div></header>
+  <div id="backendBanner" class="banner warn" hidden>Local backend is unavailable. Capture stays in this browser until upload succeeds.</div>
+  <section class="card consent-card">
+    <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
+    <p class="note">Start captures clicks, navigation, and control metadata. Typed values and keys are excluded. Stop automatically saves and generates reviewable drafts locally.</p>
+    <label for="goal" class="field-label">What should improve?</label>
+    <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
+    <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
+    <p class="note">Screenshots may contain private information; pixels are not redacted. Video and audio are unavailable in this release.</p>
+  </section>
+  <section class="card control-card">
+    <button id="recordBtn" class="btn" disabled>Start capture</button>
+    <button id="stopBtn" class="btn danger" hidden>Stop &amp; generate drafts</button>
+    <button id="retryBtn" class="btn" hidden>Retry upload</button>
+    <button id="generateBtn" class="btn" hidden>Retry draft generation</button>
+    <button id="reviewBtn" class="btn" hidden>Review drafts</button>
+    <button id="discardBtn" class="btn" hidden>Discard unsaved capture</button>
+    <div class="meta" id="meta" aria-live="polite"></div>
+    <div id="warning" class="banner warn" role="status" hidden></div>
+    <div id="error" class="error" role="alert" hidden></div>
+  </section>
+  <section class="card log-card"><h3>Activity &amp; consent</h3><div id="log"></div></section>
+  <footer class="footer"><a href="../options/options.html" target="_blank">All recordings &amp; drafts</a> · Chrome / Edge 116+</footer>
+</main>
 <script type="module" src="popup.js"></script>
 </body>
 </html>

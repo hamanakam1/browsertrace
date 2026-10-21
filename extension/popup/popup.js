@@ -1,115 +1,113 @@
 import { BACKEND_ORIGIN } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
-import { getState, setState } from "../shared/storage.js";
 
-const STATUS = {
-  IDLE: "Idle",
-  RECORDING: "Recording",
-  STOPPING: "Stopping…"
-};
+const elements = Object.fromEntries(["status", "consent", "goal", "screenshots", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner"].map((id) => [id, document.getElementById(id)]));
+let current = { status: "idle", enabled: false };
+let busy = false;
+let operationError = "";
+let pendingConsent = null;
 
-const statusEl = document.getElementById("status");
-const consentEl = document.getElementById("consent");
-const recordBtn = document.getElementById("recordBtn");
-const stopBtn = document.getElementById("stopBtn");
-const metaEl = document.getElementById("meta");
-const logEl = document.getElementById("log");
-const backendBanner = document.getElementById("backendBanner");
-const audioEl = document.getElementById("audio");
-
-let enabled = false;
-let recording = false;
-let backendOk = false;
-
-function setStatus(s) {
-  statusEl.textContent = s;
-  statusEl.className = "status" + (s === STATUS.RECORDING ? " recording" : "");
-  recordBtn.disabled = !enabled || recording || !backendOk;
-  stopBtn.disabled = !enabled || !recording;
-  stopBtn.style.display = recording ? "inline-block" : "none";
-  recordBtn.style.display = recording ? "none" : "inline-block";
+function showError(message = "") {
+  elements.error.textContent = message;
+  elements.error.hidden = !message;
 }
 
-async function checkBackend() {
-  try {
-    const res = await fetch(`${BACKEND_ORIGIN}/api/extension/health`, { signal: AbortSignal.timeout(3000) });
-    backendOk = res.ok;
-  } catch (_) {
-    backendOk = false;
-  }
-  if (backendBanner) {
-    backendBanner.style.display = backendOk ? "none" : "block";
-  }
-  setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
-}
-
-async function refresh() {
-  await checkBackend();
-  const state = await getState();
-  enabled = !!state.enabled;
-  recording = !!state.recording;
-  consentEl.checked = enabled;
-  audioEl.checked = !!state.audio;
-  setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
-  if (recording) {
-    metaEl.textContent = `Session started ${new Date(state.sessionStart || 0).toLocaleTimeString()}`;
-  } else {
-    metaEl.textContent = "";
-  }
-  renderLog();
+function render(state) {
+  const finishedSession = current.session && !state.session;
+  current = state;
+  const recording = state.status === "recording";
+  const pending = state.status === "pending";
+  const working = ["saving", "generating"].includes(state.status);
+  const labels = { idle: "Ready to capture", recording: "Capturing", saving: "Saving…", pending: "Upload pending", generating: "Generating drafts…", ready: "Drafts ready", error: "Needs retry" };
+  elements.status.textContent = labels[state.status] || state.status;
+  elements.status.className = "status" + (recording ? " recording" : "");
+  elements.consent.checked = pendingConsent === null ? state.enabled : pendingConsent;
+  elements.consent.disabled = busy || working;
+  elements.goal.disabled = !!state.session || busy || working;
+  elements.screenshots.disabled = !!state.session || busy || working;
+  if (state.session) elements.screenshots.checked = state.session.screenshotsConsent === true;
+  else if (finishedSession) elements.screenshots.checked = false;
+  elements.recordBtn.hidden = !!state.session || working;
+  elements.recordBtn.disabled = !state.enabled || busy || working;
+  elements.stopBtn.hidden = !recording;
+  elements.stopBtn.disabled = busy;
+  elements.retryBtn.hidden = !pending;
+  elements.retryBtn.disabled = busy;
+  elements.discardBtn.hidden = !pending;
+  elements.discardBtn.disabled = busy;
+  elements.generateBtn.hidden = !(state.status === "error" && state.result);
+  elements.generateBtn.disabled = busy;
+  elements.reviewBtn.hidden = !state.result?.id;
+  elements.reviewBtn.disabled = busy;
+  elements.meta.textContent = state.session ?
+    `${state.session.eventCount} events · ${state.session.screenshotCount} screenshots · started ${new Date(state.session.startTime).toLocaleTimeString()}` :
+    state.result ? `${state.result.eventCount} events saved · ${state.result.ticketCount || 0} draft tickets. Review before sending to another system.` :
+      "The page panel shows capture status and basic controls.";
+  showError(state.session?.error || state.result?.error || operationError);
+  elements.warning.textContent = state.session?.warning || state.result?.warning || "";
+  elements.warning.hidden = !elements.warning.textContent;
 }
 
 async function renderLog() {
   const log = await loadConsentLog();
-  logEl.innerHTML = log.slice(-20).reverse().map((e) => {
-    const ts = new Date(e.ts).toLocaleTimeString();
-    return `<div class="log-entry">[${ts}] ${e.action}${e.tabId !== undefined ? ` tab:${e.tabId}` : ""}</div>`;
-  }).join("");
+  elements.log.replaceChildren(...log.slice(-8).reverse().map((entry) => {
+    const row = document.createElement("div");
+    row.className = "log-entry";
+    row.textContent = `${new Date(entry.ts).toLocaleTimeString()} · ${entry.action.replaceAll("_", " ")}`;
+    return row;
+  }));
 }
 
-consentEl.addEventListener("change", async () => {
-  enabled = consentEl.checked;
-  await setState({ enabled });
-  await chrome.runtime.sendMessage({ type: "extension.setEnabled", enabled });
-  setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
-  renderLog();
-});
-
-audioEl.addEventListener("change", async () => {
-  await setState({ audio: audioEl.checked });
-});
-
-recordBtn.addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
+async function refresh() {
   try {
-    const result = await chrome.runtime.sendMessage({ type: "extension.startRecording", tabId: tab.id });
-    recording = true;
-    await setState({ recording: true, sessionStart: result.startTime });
-    setStatus(STATUS.RECORDING);
-  } catch (err) {
-    alert("Could not start recording: " + err.message);
-  }
-});
+    const state = await chrome.runtime.sendMessage({ type: "extension.getStatus" });
+    if (!state?.ok) throw new Error(state?.error || "Capture worker did not respond.");
+    render(state);
+    await renderLog();
+  } catch (error) { showError(error.message); }
+}
 
-stopBtn.addEventListener("click", async () => {
+async function command(type, fields = {}) {
+  operationError = "";
+  const changesConsent = type === "extension.setEnabled";
+  if (changesConsent) pendingConsent = fields.enabled === true;
+  busy = true;
+  render(current);
   try {
-    const result = await chrome.runtime.sendMessage({ type: "extension.stopRecording" });
-    recording = false;
-    await setState({ recording: false });
-    setStatus(STATUS.IDLE);
-    metaEl.textContent = `Saved ${result.eventCount} events`;
-  } catch (err) {
-    alert("Could not stop recording: " + err.message);
+    const response = await chrome.runtime.sendMessage({ type, ...fields });
+    if (response?.status) render(response);
+    if (!response?.ok) throw new Error(response?.error || "The operation did not complete.");
+    await refresh();
+  } catch (error) { operationError = error.message; }
+  finally {
+    if (changesConsent) pendingConsent = null;
+    busy = false;
+    render(current);
   }
+}
+
+elements.consent.addEventListener("change", () => command("extension.setEnabled", { enabled: elements.consent.checked }));
+elements.recordBtn.addEventListener("click", async () => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error("Choose a webpage to capture.");
+    await command("extension.startRecording", { tabId: tab.id, consent: elements.consent.checked, screenshots: elements.screenshots.checked, goal: elements.goal.value });
+  } catch (error) { showError(error.message); }
+});
+elements.stopBtn.addEventListener("click", () => command("extension.stopRecording"));
+elements.retryBtn.addEventListener("click", () => command("extension.retryUpload"));
+elements.generateBtn.addEventListener("click", () => command("extension.retryGeneration"));
+elements.reviewBtn.addEventListener("click", () => command("extension.openReview"));
+elements.discardBtn.addEventListener("click", () => {
+  if (confirm("Discard this capture from the browser? Its events cannot be recovered.")) command("extension.discardCapture");
 });
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "extension.recordingState") {
-    recording = msg.recording;
-    setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
-    renderLog();
-  }
-});
-
+async function checkBackend() {
+  try {
+    const response = await fetch(`${BACKEND_ORIGIN}/api/extension/health`, { signal: AbortSignal.timeout(3000) });
+    elements.backendBanner.hidden = response.ok;
+  } catch { elements.backendBanner.hidden = false; }
+}
 refresh();
+checkBackend();
+setInterval(refresh, 1200);

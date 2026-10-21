@@ -21,6 +21,13 @@ HOST = "127.0.0.1"
 
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(30)
+
+    def do_OPTIONS(self):
+        handle_request(self)
+
     def do_GET(self):
         handle_request(self)
 
@@ -53,8 +60,8 @@ def main():
    │                                 │
    └─────────────────────────────────┘
 
-panther-intent-capture backend  v1.0.0   listening on http://{HOST}:{PORT}
-local-first  •  consent-gated  •  secret-redacted  •  user-deletable
+panther-intent-capture backend  v1.1.0   listening on http://{HOST}:{PORT}
+local capture  •  explicit consent  •  reviewable drafts  •  optional unredacted screenshots
     """.format(HOST=HOST, PORT=PORT))
     try:
         server.serve_forever()

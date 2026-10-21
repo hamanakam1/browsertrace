@@ -1,200 +1,106 @@
-# panther-intent-capture
+# Panther Intent Capture
 
-```
-        ⠀⠀⠀⠀⢀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣄⠀⠀⠀⠀
-        ⠀⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀
-        ⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠀⠀
-        ⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀
-        ⠀⣿⣿⣿    (o)   (o)    ⣿⣿⣿⠀⠀
-        ⠀⣿⣿⣿        △        ⣿⣿⣿⠀⠀
-        ⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀
-        ⠀⠀⠙⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀
+Turn a browser session into a clear, reviewable request for improvement.
 
-   ┌─────────────────────────────────┐
-   │  ▭   PANTHER INTENT CAPTURE   ✕ │
-   │                                 │
-   │     (panther watches browser)   │
-   │                                 │
-   └─────────────────────────────────┘
-```
+Panther records the interactions you choose to capture, keeps the evidence on your computer, and helps you explain what should change. Review the resulting draft, add the expected outcome, then send it to AI Dashboard or export JSON for another system.
 
-> Decompose intent on a website or portal. Turn that intelligence into tickets, with screenshots, audio, and video — so coding agents can take action based on what was captured.
+The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. It works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
-**panther-intent-capture** is a Manifest V3 browser extension plus a local inference backend. It records interactions on pages you configure, infers the user's intent from those interactions, and emits structured work items (tickets) that coding agents can act on. Everything runs locally, nothing leaves your machine unless you export it, and recording is opt-in by default.
+## What works in this version
 
-Built first for **Microsoft Edge**, with **Chrome** and **Firefox** variants ready.
+- **Chosen-tab capture:** start from the extension popup; record clicks, changes, submissions, and navigation within that tab's origin. Capture starts off. Typed values, typed keys, and full page text are excluded.
+- **Visible controls:** a compact popup, recording badge, and floating page panel show capture status. The panel can stop capture and open the drafts. Hiding the panel does not stop capture.
+- **Optional screenshots:** opt in separately for each session to collect up to five screenshots at click or submission points. Screenshot pixels are **not redacted**; inspect them before sharing.
+- **Evidence drafts without a model:** stopping saves the capture and prepares a draft from observed actions and your stated goal. This does not infer that a bug exists.
+- **Optional local AI:** explicitly choose **Generate with local AI** for proposed intents and task decomposition using your configured local Ollama model. No paid or remote inference fallback is used.
+- **Human review:** inspect events and any screenshots, edit the title, problem statement, and acceptance criteria, and save draft edits locally.
+- **AI Dashboard delivery:** preview the exact ticket, then confirm one draft at a time. The adapter creates a backlog ticket with `no-auto`, preserves capture identity for retries, and independently reads it back before showing verified delivery.
+- **Portable JSON:** export the same draft and provenance for another tool. Additional destinations need an adapter or importer; GitHub, Jira, Linear, and arbitrary native apps are not built-in integrations yet.
 
----
-
-## Purpose
-
-panther-intent-capture captures what a person actually does on a company dashboard, portal, or website — clicks, navigation, form edits, and the pages they touch — decomposes that behavior into intent (e.g. "approve expense report", "reconcile vendor invoice", "add new employee"), and converts each intent into an actionable ticket:
-
-- **Intent decomposition** — observed interactions are grouped and labeled by goal
-- **Tickets** — each intent becomes a work item with description, steps to reproduce, and owner
-- **Screenshots** — key frames captured at decision points and attached to the ticket
-- **Audio / video recording** — session media captured for later review (planned)
-- **Agent-ready output** — tickets and media are structured so coding agents can read the intent and take action (create issues, write code, run tests, deploy fixes)
-
----
-
-## Brand
-
-| | |
-|---|---|
-| **Name** | panther-intent-capture |
-| **Tagline** | Capture Intent. Understand Behavior. |
-| **Scope** | Browser extension + standalone local inference backend |
-| **Initial target** | Microsoft Edge (Manifest V3) |
-| **Also ready** | Google Chrome, Firefox |
-
-### Visual identity
-
-Brand colors:
-
-```
-#0a0a0a  panther-black   primary
-#1a1a1a  panther-dark    surfaces
-#06b6d4  intent-cyan     trace / capture
-#10b981  emerald-500     consent / ok
-#ef4444  rose-500        stop / delete
-#fbbf24  amber-400       panther accent
-```
-
-The mark is a stalking panther framing an **eye** (observe) and a **cursor trail** (intent captured).
-
----
-
-## What it does
-
-1. **Opt-in recording** — Consent is required before anything is captured. Default is off.
-2. **Page-scoped capture** — Records only pages you configure in the manifest. Never arbitrary sites, never full desktop by default.
-3. **Interaction tracing** — Captures click / keydown / change / submit events with target, coordinates, and timestamp.
-4. **Secret redaction** — Password / token / credential-named fields are scrubbed before storage (extension + backend).
-5. **Local inference** — Sampled frames are sent to a local Ollama instance; a narrative analysis of the session's intent is generated.
-6. **Intent decomposition** — The interaction timeline is decomposed into named intents and converted into tickets.
-7. **Tickets with screenshots** — Each ticket carries description, steps, and attached screenshots from the session.
-8. **Recordings library** — Play video, view inference results, delete recordings. 30-day TTL + cap.
-9. **Audio / video** — Session media captured for later review by coding agents.
-
----
-
-## Architecture
-
-```
- _______________________________________________________________________________
-|                                                                               |
-|  BROWSER EXTENSION (Manifest V3)                         STANDALONE BACKEND   |
-|                                                                               |
-|  ┌─────────┐   ┌──────────────┐   ┌─────────────────────┐      ┌────────┐   |
-|  │  Popup  │──▶│ Content script│──▶│ Offscreen (MediaRecorder)│──▶ POST │   |
-|  │ consent │   │ page events   │   │ video + events bundle      multipart│   |
-|  └─────────┘   └──────────────┘   └─────────────────────┘      └────┬────┘   |
-|                                                                               │   ▼
-|                                   ┌─────────────────────────────────────────┐   |
-|                                   │  /api/record   /api/list   /api/infer   │   |
-|                                   │  /video          /delete   /health        │   |
-|                                   │        (Python, :7890)                   │   |
-|                                   └────────────────┬────────────────────────┘   |
-|                                                    │ local only                  │   |
-|                                                    ▼                             │   |
-|                                   ┌─────────────────────────────────────────┐   |
-|                                   │  ~/.panther-intent-capture/                         │   |
-|                                   │  recordings/ events/ inference/ consent   │   |
-|                                   └─────────────────────────────────────────┘   |
-|_______________________________________________________________________________|
-
-Recorded session
-        │
-        ▼
-┌──────────────────┐   decompose intent   ┌──────────────────┐
-│  raw events +    │─────────────────────▶│  intent tickets  │
-│  screenshots     │                      │  (work items)    │
-└──────────────────┘                      └─────────┬────────┘
-                                                   │ coding agent
-                                                   ▼
-                                          action: issue / code / test / deploy
-```
-
----
+Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
 
 ## Quick start
 
-### 1. Start the backend
+You need Python 3.11+ and Chrome or Edge 116+. The core backend uses Python's standard library; no package installation or Ollama service is needed for evidence drafts.
+
+From a checkout of this repository:
 
 ```bash
-cd backend
-./start.sh          # listens on http://127.0.0.1:7890
+python3 backend/server.py
 ```
 
-Or install as a launchd service:
+Keep that terminal running. Open [the local review page](http://127.0.0.1:7890/) to check the backend and browse captures. `bash backend/start.sh` starts the same server. Stop it with Ctrl-C. Automatic launchd installation is not part of this quick start.
+
+Load the extension:
+
+1. Open `edge://extensions/` or `chrome://extensions/`.
+2. Enable **Developer mode**, choose **Load unpacked**, and select this repository's `extension/` directory.
+3. Pin Panther in the browser toolbar. The default `extension/manifest.json` works for both supported browsers; no manifest swapping is needed.
+4. Open the website you want to improve, such as AI Dashboard at `http://127.0.0.1:7878/`.
+5. Open Panther, enable capture consent, and write a short goal in **What should improve?** Keep screenshots off unless you want to retain visible page pixels.
+6. Click **Start capture**, reproduce the workflow, then choose **Stop & generate drafts** in the popup or page panel.
+7. Click **Review drafts**. Check the observed steps, describe the problem or improvement, and add a verifiable expected result.
+8. Choose **Save draft edits** before exporting JSON, or **Preview AI Dashboard ticket** to inspect the exact outbound payload. **Send this reviewed ticket** performs the dashboard write.
+
+Capture stops when you leave the chosen origin, close the tab, revoke capture consent, or reach the event limit. Same-origin reloads and SPA navigation are supported. A browser restart leaves an interrupted capture available for recovery rather than resuming recording automatically.
+
+## AI Dashboard and other systems
+
+AI Dashboard is the first destination adapter. By default Panther's backend connects to `http://127.0.0.1:7878`; the extension never writes directly to the dashboard. The dashboard must already be running and provide the supported MasterBoard API. Panther does not install, restart, or change dashboard services.
+
+Submitted tickets contain a bounded summary of intent, observed evidence, reproduction steps, acceptance criteria, source URL, timestamps, and provenance. Media references are not uploaded screenshot attachments. Sending a draft grants no permission to execute it: tickets remain in backlog with the `no-auto` review fence.
+
+### Intent bundle
+
+For another system, use **Export JSON** and map the versioned intent bundle into that system's own draft or issue format. The capture and review workflow is independent of the destination. See [integration contracts and adapter guidance](docs/INTEGRATIONS.md) for the export shape, HTTP routes, retry behavior, and configuration.
+
+## Local AI and configuration
+
+All settings below are backend environment variables. Set them before starting the server.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PANTHER_DATA_DIR` | `~/.panther-intent-capture` | Private capture, draft, and receipt storage. |
+| `PANTHER_DASHBOARD_URL` | `http://127.0.0.1:7878` | AI Dashboard's loopback HTTP(S) origin. Remote addresses and redirects are rejected. |
+| `OLLAMA_ENDPOINT` | `http://127.0.0.1:11434/v1` | Local OpenAI-compatible inference endpoint. A loopback HTTP address is required. |
+| `OLLAMA_MODEL` | `qwen3.8-hermes:latest` | Model name used only when local AI generation is explicitly requested. It must already be available on your computer. |
+| `EXTENSION_BACKEND_PORT` | `7890` | Backend listener port. The shipped extension expects `7890`; changing this also requires updating its backend origin and host permission. |
+
+For example, choose an already installed local model when starting the backend:
 
 ```bash
-cp backend/launchd/com.panther-intent-capture.backend.plist \
-   ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.panther-intent-capture.backend.plist
+OLLAMA_MODEL=your-installed-model python3 backend/server.py
 ```
 
-### 2. Load the extension
+An unavailable model or invalid model response produces a visible generation error and keeps the saved capture available. You can retry or use the evidence draft. Current event-only capture does not promise visual analysis of the optional screenshots; provenance records whether media was actually analyzed.
 
-**Microsoft Edge:**
-1. `edge://extensions/` → **Developer mode** → **Load unpacked**
-2. Select `extension/`
+## Privacy, retention, and recovery
 
-**Google Chrome:** use `extension/manifest.chrome.json`  
-**Firefox:** use `extension/manifest.firefox.json`
+Panther captures a small allowlist of control metadata instead of input values or keystrokes. URL sanitization removes credentials and query parameters; text sanitization removes common secret patterns. These filters reduce exposure but do not guarantee that every identifier, control label, user-written goal, or screenshot is free of private information.
 
-### 3. Record
+Screenshots require separate consent and may include any visible content in the chosen tab. They are stored locally for review. JSON exports and dashboard summaries contain evidence references rather than image data.
 
-1. Open any page you've added to `host_permissions` in the manifest
-2. Click the extension icon → enable consent → **Start Recording**
-3. Browse and interact normally
-4. Click **Stop Recording**
-5. Open **Extension options** → view video + inference results + generated tickets
+While recording, the browser persists capture state so the extension service worker can restart. If the backend is unavailable at Stop, Panther shows **Upload pending** and keeps the capture in browser storage. Use **Retry upload** after starting the backend; the same session identity prevents a second recording. **Discard unsaved capture** removes that browser copy. Generation failure has a separate retry because the recording may already be saved.
 
-### 4. Tests
+Backend captures have a 30-day retention limit and a cap of 200 records, enforced when storage is accessed. **Delete capture** removes its local capture artifacts and saved drafts. It does not remove downloaded exports, browser consent history, already submitted dashboard tickets, or delivery receipts. Receipts retain capture identity, a content hash, target, ticket ID, and delivery state to prevent duplicate submissions; they do not retain the full captured evidence.
+
+The backend binds to `127.0.0.1`. Its origin and request-header checks are browser request protections, not user authentication. Treat this as a local single-user tool; do not expose the port publicly or use the header as an access token.
+
+## Development and verification
+
+Run the focused synthetic test suites from the repository root:
 
 ```bash
-# Extension redaction unit test (Deno)
-deno test tests/redaction_test.mjs
+node --test tests/*.mjs
+python3 -B -m unittest discover -s tests -p 'test_*.py'
 ```
 
----
+The Python tests use temporary data directories and fake loopback dashboard/inference servers. The JavaScript tests exercise capture state and redaction with browser API doubles. Passing them does not establish that the unpacked extension has been installed and exercised in a real browser, that a particular local AI model works, or that a live AI Dashboard ticket has been accepted. Those are separate checks using a harmless, consented capture and explicit delivery confirmation.
 
-## Privacy & consent (hard gates)
+See the [1.1.0 test results and pilot limits](docs/TEST_RESULTS.md) for the automated and real-browser evidence. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
 
-| Rule | Enforcement |
-|---|---|
-| **Opt-in only** | Recording is off by default; explicit consent per session |
-| **Page-scoped** | `tabCapture` limited to pages you configure; no arbitrary sites |
-| **Visible indicator** | Persistent badge while recording; browser tab indicator enforced |
-| **No secrets** | Password/token/credential fields redacted before storage |
-| **Local-first** | Everything stays under `~/.panther-intent-capture/` unless you export |
-| **User deletes** | 30-day TTL; any recording can be deleted at any time |
-| **Consent audit** | Every start/stop logged with timestamp |
-
----
-
-## Contributing
-
-panther-intent-capture is open source and we welcome contributions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to get started, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for our community standards.
-
-### Good first issues
-- Add a Safari Web Extension variant
-- Add real-time / streaming inference overlay
-- Add click heatmap visualization
-- Add encrypted export for sharing recordings
-- Add audio capture alongside video
-
-### Security
-See [`SECURITY.md`](SECURITY.md) for vulnerability reporting.
-
----
+See [ROADMAP.md](ROADMAP.md) for remaining work, [CONTRIBUTING.md](CONTRIBUTING.md) for contributing, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## License
 
 [MIT](LICENSE)
-
----
-
-Made for decomposing intent on dashboards and portals — transparently, locally, and with consent.

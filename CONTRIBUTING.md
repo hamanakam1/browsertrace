@@ -12,9 +12,10 @@ Thank you for considering a contribution! panther-intent-capture is an open-sour
 ## Verification
 
 ### Extension
-- Load the unpacked extension in Edge/Chrome/Firefox and verify recording starts/stops with consent
+- Load the unpacked extension in Chrome or Edge 116+ in a separate test profile and verify capture starts/stops with consent. Firefox/Safari are unsupported previews.
 - Confirm the visible badge appears while recording
-- Confirm secret fields (e.g. `password`, `token`) are redacted in stored events
+- Confirm typed values and keys are absent from stored events and screenshot capture requires separate consent
+- Verify the floating controls, automatic evidence drafts, offline upload retry, and visible generation failures
 
 ### Backend
 ```bash
@@ -25,8 +26,9 @@ curl http://127.0.0.1:7890/api/extension/health
 
 ### Unit tests
 ```bash
-# Extension redaction logic (Deno)
-deno test tests/redaction_test.mjs
+node --test tests/*.mjs
+python3 -B -m unittest discover -s tests -p 'test_*.py' -v
+python3 scripts/package_extension.py
 ```
 
 ## Code style
@@ -39,9 +41,11 @@ deno test tests/redaction_test.mjs
 
 Any feature that captures or stores user data must:
 - Be opt-in
-- Redact secrets before storage
+- Minimize captured data and filter common secrets; never describe screenshot pixels as redacted
 - Show a visible indicator while active
 - Allow user deletion
+
+Use temporary `PANTHER_DATA_DIR` storage and synthetic dashboard endpoints for automated tests. Never create live dashboard tickets as a smoke test. Report unit tests, loaded-browser checks, local model checks, and confirmed live ticket delivery separately. CI runs dependency-free JavaScript and Python regressions, then retains an unpackable Chromium extension ZIP.
 
 ## Questions
 

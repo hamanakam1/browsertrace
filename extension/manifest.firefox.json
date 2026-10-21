@@ -1,71 +1,44 @@
 {
   "manifest_version": 3,
-  "name": "panther-intent-capture",
-  "version": "1.0.0",
-  "description": "Record page usage with consent and run local inference to learn from your own browsing.",
-  "minimum_chrome_version": "109",
-
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "panther-intent-capture@panther-intent-capture.dev",
-      "strict_min_version": "109"
-    }
-  },
-
+  "name": "Panther Intent Capture (Firefox preview)",
+  "version": "1.1.0",
+  "description": "Unsupported preview manifest. Capture is currently supported on Chrome and Edge 116+.",
   "permissions": [
     "storage",
-    "tabCapture",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
-
   "host_permissions": [
-    "https://example.com/*",
     "http://127.0.0.1:7890/*"
   ],
-
   "background": {
-    "service_worker": "background/background.js",
+    "scripts": [
+      "background/background.js"
+    ],
     "type": "module"
   },
-
+  "options_page": "options/options.html",
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "panther-intent-capture",
+    "default_title": "Panther Intent Capture",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     }
   },
-
-  "content_scripts": [
-    {
-      "matches": ["https://example.com/*"],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
-      "run_at": "document_idle"
-    }
-  ],
-
-  "offscreen": {
-    "justifications": ["media_recording"]
-  },
-
-  "options_page": "options/options.html",
-
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-
-  "web_accessible_resources": [
-    {
-      "resources": ["offscreen/offscreen.html"],
-      "matches": ["https://example.com/*"]
-    }
-  ],
-
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "panther-intent-capture@panther-intent-capture.dev",
+      "strict_min_version": "121.0"
+    }
   }
+}

@@ -1,0 +1,330 @@
+import { BACKEND_ORIGIN } from "./constants.js";
+import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "./redaction.js";
+
+export const SESSION_KEY = "extension.capture.session";
+export const RESULT_KEY = "extension.capture.result";
+export const SETTINGS_KEY = "extension.local.state";
+export const BROWSER_KEY = "extension.capture.browserActive";
+export const MAX_EVENTS = 2000;
+const MAX_SCREENSHOTS = 5;
+const MAX_SCREENSHOT_BYTES = 300000;
+const SCREENSHOT_COOLDOWN_MS = 3000;
+const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "extension-v1" };
+
+/** Persist before acknowledging: a Chromium service worker can stop at any time. */
+export function createCaptureController(api, fetcher, now = Date.now) {
+  let queue = Promise.resolve();
+  const serial = (task) => {
+    const result = queue.then(task);
+    queue = result.catch(() => {});
+    return result;
+  };
+  const read = async (key) => (await api.storage.local.get(key))[key];
+  const save = async (session) => api.storage.local.set({ [SESSION_KEY]: session });
+  const saveResult = async (result) => api.storage.local.set({ [RESULT_KEY]: result });
+  const tabMessage = async (tabId, message) => {
+    try { return await api.tabs.sendMessage(tabId, message, { frameId: 0 }); } catch { return null; }
+  };
+  const audit = async (action, extra = {}) => {
+    const key = "extension.consent.log";
+    const log = await read(key) || [];
+    await api.storage.local.set({ [key]: [...log, { ts: now(), action, ...extra }].slice(-1000) });
+  };
+  const badge = async (session) => {
+    if (!session) return;
+    try {
+      await api.action.setBadgeText({ tabId: session.tabId, text: session.status === "recording" ? "REC" : "!" });
+      await api.action.setBadgeBackgroundColor({ tabId: session.tabId, color: session.status === "recording" ? "#dc2626" : "#b45309" });
+    } catch { /* The captured tab may have been closed. */ }
+  };
+  const status = async () => {
+    const session = await read(SESSION_KEY);
+    const settings = await read(SETTINGS_KEY) || {};
+    const result = await read(RESULT_KEY) || null;
+    return {
+      ok: true, enabled: settings.enabled === true,
+      status: session?.status || result?.status || "idle",
+      session: session ? {
+        sessionId: session.sessionId, tabId: session.tabId, startTime: session.startTime,
+        eventCount: session.events.length, screenshotCount: session.screenshots.length,
+        screenshotsConsent: session.screenshotConsent === true,
+        error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url
+      } : null,
+      result
+    };
+  };
+  const trustedControl = (sender) => {
+    if (sender?.id !== api.runtime.id) return false;
+    try {
+      const source = new URL(sender.url);
+      const extension = new URL(api.runtime.getURL(""));
+      return source.protocol === extension.protocol && source.host === extension.host &&
+        !source.username && !source.password &&
+        ["/popup/popup.html", "/options/options.html"].includes(source.pathname);
+    } catch { return false; }
+  };
+  const validPage = (session, sender) => !!session && sender?.id === api.runtime.id &&
+    sender.tab?.id === session.tabId && sender.frameId === 0 && origin(sender.url) === session.origin;
+
+  async function inject(session) {
+    await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
+    const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId });
+    if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
+  }
+
+  async function start(message) {
+    if (/preview/i.test(api.runtime.getManifest?.().name || "")) throw new Error("This browser build is an unsupported preview. Use Chrome or Edge 116+ for capture.");
+    const settings = await read(SETTINGS_KEY) || {};
+    if (settings.enabled !== true || message.consent !== true) throw new Error("Enable capture consent before starting.");
+    if (await read(SESSION_KEY)) throw new Error("Finish or discard the existing capture before starting another.");
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id !== message.tabId) throw new Error("Choose the currently active tab to capture.");
+    if (!/^https?:\/\//i.test(tab.url || "")) throw new Error("Choose an ordinary http or https webpage. Browser settings and extension pages cannot be captured.");
+    if (message.audio || message.video) throw new Error("Video and tab audio are not supported in this release.");
+    const session = {
+      sessionId: crypto.randomUUID(), status: "recording", consent: true,
+      tabId: tab.id, windowId: tab.windowId, origin: origin(tab.url),
+      startTime: now(), url: sanitizeUrl(tab.url), title: sanitizeText(tab.title || "", 200),
+      goal: sanitizeText(message.goal || "", 1000), extensionId: api.runtime.id,
+      screenshotConsent: message.screenshots === true, events: [], screenshots: [], lastScreenshotTs: 0, warning: ""
+    };
+    await save(session);
+    try { await inject(session); }
+    catch (error) { await api.storage.local.remove(SESSION_KEY); throw error; }
+    await api.storage.local.remove(RESULT_KEY);
+    await badge(session);
+    await audit("start", { tabId: session.tabId, screenshots: session.screenshotConsent });
+    return status();
+  }
+
+  async function screenshot(session, ts) {
+    if (!session.screenshotConsent || session.screenshots.length >= MAX_SCREENSHOTS || ts - session.lastScreenshotTs < SCREENSHOT_COOLDOWN_MS) return;
+    const [before] = await api.tabs.query({ active: true, windowId: session.windowId });
+    if (before?.id !== session.tabId || origin(before.url) !== session.origin) return;
+    // captureVisibleTab takes a WINDOW id, never a tab id.
+    const dataUrl = await api.tabs.captureVisibleTab(session.windowId, { format: "jpeg", quality: 50 });
+    const [after] = await api.tabs.query({ active: true, windowId: session.windowId });
+    if (after?.id !== session.tabId || origin(after.url) !== session.origin) return;
+    if (typeof dataUrl !== "string" || dataUrl.length > MAX_SCREENSHOT_BYTES) {
+      session.warning = "A screenshot was unavailable or exceeded the image size limit. Your interaction events are still captured.";
+      return;
+    }
+    session.screenshots.push({ ts, dataUrl });
+    session.lastScreenshotTs = ts;
+  }
+
+  async function interaction(message, sender) {
+    const session = await read(SESSION_KEY);
+    const settings = await read(SETTINGS_KEY) || {};
+    if (session?.status !== "recording" || settings.enabled !== true ||
+        message.sessionId !== session.sessionId || !validPage(session, sender)) return { ok: false, ignored: true };
+    const event = sanitizeCaptureEvent(message.payload, now());
+    if (!event) return { ok: false, ignored: true };
+    session.events.push(event);
+    await save(session);
+    if (event.type === "click" || event.type === "submit") {
+      const previousCount = session.screenshots.length;
+      const previousWarning = session.warning;
+      try { await screenshot(session, event.ts); }
+      catch {
+        session.warning = "Screenshots unavailable. Start a new capture from Panther's toolbar icon to grant screenshot access. Your interaction events are still captured.";
+      }
+      if (session.screenshots.length !== previousCount || session.warning !== previousWarning) await save(session);
+    }
+    if (session.events.length >= MAX_EVENTS) return stop("event_limit");
+    return { ok: true, eventCount: session.events.length, warning: session.warning || "" };
+  }
+
+  async function generate(result) {
+    result.status = "generating";
+    result.error = "";
+    await saveResult(result);
+    try {
+      const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/tickets/${encodeURIComponent(result.id)}`, {
+        method: "POST", headers: HEADERS, body: JSON.stringify({ use_ai: false }), signal: AbortSignal.timeout(20000)
+      });
+      if (!response.ok) throw new Error(`Draft generation returned HTTP ${response.status}.`);
+      const body = await response.json();
+      if (!Array.isArray(body.tickets)) throw new Error("Backend returned no draft ticket list.");
+      result.status = "ready";
+      result.ticketCount = body.tickets.length;
+      await audit("drafts_ready", { ticketCount: result.ticketCount });
+    } catch (error) {
+      result.status = "error";
+      result.error = `${error.message} Your recording is saved; retry draft generation.`;
+    }
+    await saveResult(result);
+    return status();
+  }
+
+  async function upload(session) {
+    session.status = "saving";
+    session.error = "";
+    await save(session);
+    await badge(session);
+    const payload = {
+      sessionId: session.sessionId, events: session.events, screenshots: session.screenshots,
+      tabId: session.tabId, startTime: session.startTime, endTime: session.endTime,
+      extensionId: session.extensionId, url: session.url, title: session.title, goal: session.goal,
+      consent: session.consent, screenshotsConsent: session.screenshotConsent, stopReason: session.stopReason
+    };
+    let receipt;
+    try {
+      const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/record`, {
+        method: "POST", headers: HEADERS, body: JSON.stringify(payload), signal: AbortSignal.timeout(20000)
+      });
+      if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}.`);
+      receipt = await response.json();
+      if (!receipt.id) throw new Error("Backend did not return a recording receipt.");
+    } catch (error) {
+      session.status = "pending";
+      session.error = `${error.message} Capture is saved in this browser; retry when the backend is available.`;
+      await save(session);
+      await badge(session);
+      return { ...(await status()), ok: false, error: session.error };
+    }
+    // Save the receipt before dropping the upload copy. Retries use sessionId
+    // idempotency if termination occurs between either durable write.
+    const result = { id: receipt.id, status: "generating", tabId: session.tabId, origin: session.origin,
+      eventCount: session.events.length, screenshotCount: session.screenshots.length, ticketCount: 0, error: "", warning: session.warning || "" };
+    await saveResult(result);
+    await api.storage.local.remove(SESSION_KEY);
+    try { await api.action.setBadgeText({ tabId: session.tabId, text: "" }); } catch {}
+    await audit("saved", { tabId: session.tabId, eventCount: session.events.length });
+    return generate(result);
+  }
+
+  async function stop(reason = "user") {
+    const session = await read(SESSION_KEY);
+    if (!session) return status();
+    if (session.status === "recording") {
+      session.status = "pending";
+      session.endTime = now();
+      session.stopReason = reason;
+      await save(session);
+      await tabMessage(session.tabId, { type: "extension.captureStop", sessionId: session.sessionId });
+      await audit("stop", { tabId: session.tabId, reason });
+    }
+    return upload(session);
+  }
+
+  async function openReview() {
+    const result = await read(RESULT_KEY);
+    await api.tabs.create({ url: api.runtime.getURL(`options/options.html${result?.id ? `?recording=${encodeURIComponent(result.id)}` : ""}`) });
+    return { ok: true };
+  }
+
+  async function handle(message, sender) {
+    if (message.type === "page.interaction") return interaction(message, sender);
+    if (message.type.startsWith("page.")) {
+      const session = await read(SESSION_KEY);
+      const result = await read(RESULT_KEY);
+      if (!validPage(session || result, sender)) return { ok: false, ignored: true };
+      if (message.type === "page.getStatus") return status();
+      if (message.type === "page.stop" && message.sessionId === session?.sessionId) return stop();
+      if (message.type === "page.openReview") return openReview();
+      return { ok: false, ignored: true };
+    }
+    if (!trustedControl(sender)) return { ok: false, error: "Capture controls are only available in the extension." };
+    switch (message.type) {
+      case "extension.getStatus": return status();
+      case "extension.startRecording": return start(message);
+      case "extension.stopRecording": return stop();
+      case "extension.openReview": return openReview();
+      case "extension.retryGeneration": {
+        const result = await read(RESULT_KEY);
+        if (!result) throw new Error("There is no saved recording to generate drafts from.");
+        return generate(result);
+      }
+      case "extension.retryUpload": {
+        const session = await read(SESSION_KEY);
+        if (!session || session.status === "recording") throw new Error("There is no stopped capture to retry.");
+        return upload(session);
+      }
+      case "extension.discardCapture": {
+        const session = await read(SESSION_KEY);
+        if (session?.status === "recording") throw new Error("Stop capture before discarding it.");
+        await api.storage.local.remove(SESSION_KEY);
+        if (session) {
+          try { await api.action.setBadgeText({ tabId: session.tabId, text: "" }); } catch {}
+          await audit("discard", { tabId: session.tabId });
+        }
+        return status();
+      }
+      case "extension.setEnabled": {
+        const settings = await read(SETTINGS_KEY) || {};
+        await api.storage.local.set({ [SETTINGS_KEY]: { ...settings, enabled: message.enabled === true } });
+        await audit(message.enabled === true ? "consent_enabled" : "consent_disabled");
+        if (message.enabled !== true && (await read(SESSION_KEY))?.status === "recording") return stop("consent_revoked");
+        return status();
+      }
+      default: return { ok: false, error: "Unknown capture command." };
+    }
+  }
+
+  // Worker recreation means an interrupted fetch has no owner. Keep a retryable
+  // state; never claim a saved recording or completed generation without receipt.
+  const recovery = (async () => {
+    const session = await read(SESSION_KEY);
+    // storage.session survives worker suspension but is cleared on browser or
+    // extension restart. Check it before tab events can resume a restored page.
+    if (api.storage.session) {
+      const browserActive = (await api.storage.session.get(BROWSER_KEY))[BROWSER_KEY] === true;
+      if (!browserActive && session?.status === "recording") {
+        session.status = "pending";
+        session.endTime = session.events.at(-1)?.ts || session.startTime;
+        session.stopReason = "browser_or_extension_restarted";
+        session.error = "Browser or extension restarted. Your captured events are saved; retry to upload them.";
+        await save(session);
+      }
+      await api.storage.session.set({ [BROWSER_KEY]: true });
+    }
+    if (session?.status === "saving") {
+      session.status = "pending";
+      session.error = "Upload was interrupted. Retry to confirm the saved recording.";
+      await save(session);
+    }
+    const result = await read(RESULT_KEY);
+    if (result?.status === "generating") {
+      result.status = "error";
+      result.error = "Draft generation was interrupted. Retry generation; your recording is saved.";
+      await saveResult(result);
+    }
+  })();
+  queue = recovery.catch(() => {});
+
+  return {
+    message: (message, sender) => {
+      // Status polls must remain responsive while upload/generation is running.
+      if (message.type === "extension.getStatus" || message.type === "page.getStatus") return recovery.then(() => handle(message, sender));
+      return serial(() => handle(message, sender));
+    },
+    tabUpdated: (tabId, change, tab) => serial(async () => {
+      const session = await read(SESSION_KEY);
+      if (session?.status !== "recording" || session.tabId !== tabId) return;
+      const url = change.url || tab.url;
+      if (url && origin(url) !== session.origin) return stop("left_origin");
+      if (change.status === "complete") {
+        try { await inject(session); } catch { return stop("page_unavailable"); }
+      }
+    }),
+    tabRemoved: (tabId) => serial(async () => {
+      const session = await read(SESSION_KEY);
+      if (session?.status === "recording" && session.tabId === tabId) return stop("tab_closed");
+    }),
+    browserStarted: (reason = "browser_restarted") => serial(async () => {
+      const session = await read(SESSION_KEY);
+      if (session?.status === "recording") {
+        session.status = "pending";
+        session.endTime = session.events.at(-1)?.ts || session.startTime;
+        session.stopReason = reason;
+        session.error = "Browser or extension restarted. Your captured events are saved; retry to upload them.";
+        await save(session);
+      }
+    })
+  };
+}
+
+function origin(url) {
+  try { return new URL(url).origin; } catch { return ""; }
+}

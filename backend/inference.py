@@ -3,23 +3,55 @@
 from __future__ import annotations
 
 import base64
-import io
+import ipaddress
 import json
 import math
 import os
 import subprocess
-import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 
 OLLAMA_ENDPOINT = os.environ.get("OLLAMA_ENDPOINT", "http://127.0.0.1:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.8-hermes:latest")
 MAX_FRAMES = 8
 MAX_LONG_EDGE = 1024
 MAX_JPEG_BYTES = 350_000
+
+
+def local_endpoint() -> str:
+    """Local inference is an explicit boundary, including configured endpoints."""
+    parsed = urlsplit(OLLAMA_ENDPOINT)
+    host = parsed.hostname or ""
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if parsed.scheme != "http" or not loopback or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("OLLAMA_ENDPOINT must be a loopback HTTP endpoint")
+    return OLLAMA_ENDPOINT.rstrip("/")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise ValueError("Local inference redirects are not allowed")
+
+
+def local_chat(payload: Dict[str, Any], timeout: int = 90) -> str:
+    request = urllib.request.Request(
+        f"{local_endpoint()}/chat/completions", data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(request, timeout=timeout) as response:
+        body = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+    content = body["choices"][0]["message"]["content"]
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Local AI returned no text")
+    return content
 
 
 def _ffprobe_duration(video_path: str) -> Optional[float]:
@@ -41,6 +73,8 @@ def _ffprobe_duration(video_path: str) -> Optional[float]:
 
 def _sample_frames(video_path: str, max_frames: int = MAX_FRAMES) -> List[str]:
     """Uniformly sample frames from the video, return base64 JPEGs."""
+    if not video_path:
+        return []
     duration = _ffprobe_duration(video_path)
     if duration is None or duration <= 0:
         duration = 120.0  # fallback
@@ -58,7 +92,7 @@ def _extract_frame_jpeg(video_path: str, timestamp: float) -> Optional[str]:
         out = subprocess.run(
             [
                 "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", video_path,
-                "-frames:v", "1", "-s", f"{MAX_LONG_EDGE}:{MAX_LONG_EDGE}",
+                "-frames:v", "1", "-vf", f"scale={MAX_LONG_EDGE}:{MAX_LONG_EDGE}:force_original_aspect_ratio=decrease",
                 "-q:v", "4", "-f", "image2pipe", "-",
             ],
             capture_output=True, timeout=30,
@@ -71,7 +105,7 @@ def _extract_frame_jpeg(video_path: str, timestamp: float) -> Optional[str]:
             out2 = subprocess.run(
                 [
                     "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", video_path,
-                    "-frames:v", "1", "-s", f"{MAX_LONG_EDGE // 2}:{MAX_LONG_EDGE // 2}",
+                    "-frames:v", "1", "-vf", f"scale={MAX_LONG_EDGE // 2}:{MAX_LONG_EDGE // 2}:force_original_aspect_ratio=decrease",
                     "-q:v", "6", "-f", "image2pipe", "-",
                 ],
                 capture_output=True, timeout=30,
@@ -113,15 +147,7 @@ def _ollama_chat(frames: List[str], events_summary: str) -> str:
         "max_tokens": 600,
         "stream": False,
     }
-    req = urllib.request.Request(
-        f"{OLLAMA_ENDPOINT}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    return body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    return local_chat(payload)
 
 
 def summarize_events(events: List[Dict[str, Any]]) -> str:
@@ -129,11 +155,13 @@ def summarize_events(events: List[Dict[str, Any]]) -> str:
         return "No interaction events recorded."
     lines = []
     for e in events[:200]:
+        if not isinstance(e, dict):
+            continue
         ts = e.get("ts", 0)
         t = e.get("type", "?")
-        target = e.get("target", {})
+        target = e.get("target") if isinstance(e.get("target"), dict) else {}
         tag = target.get("tag", "?")
-        text = (target.get("text") or "")[:60]
+        text = str(target.get("text") or "")[:60]
         lines.append(f"  {ts}ms | {t} | <{tag}> | {text}")
     return "\n".join(lines)
 
@@ -145,8 +173,8 @@ def run_inference(video_path: str, events: List[Dict[str, Any]]) -> Dict[str, An
     events_summary = summarize_events(events)
     try:
         narrative = _ollama_chat(frames, events_summary)
-    except Exception as exc:  # noqa: BLE001 - surface inference errors gracefully
-        narrative = f"Inference failed: {exc}"
+    except Exception as exc:
+        raise RuntimeError("Local inference failed; check Ollama and retry") from exc
     return {
         "model": OLLAMA_MODEL,
         "frames_sampled": len(frames),
