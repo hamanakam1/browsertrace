@@ -1,7 +1,7 @@
 import { monitorView, liveView } from "./status-model.js";
 
 const elements = Object.fromEntries(["powerStatus", "powerDot", "turnOnBtn", "turnOffBtn", "runtimeHelp", "activity", "activityDetail", "operationStatus", "connectionStatus", "error", "warning", "countsHeading", "eventCount", "screenshotCount", "historyNote", "resultSummary", "draftSummary", "receiptSummary", "receiptTime", "stopBtn", "cancelBtn", "reviewBtn", "understandingMode", "understandingSummary", "observationFreshness", "intentContext", "observedPage", "statedGoal", "inferredIntent", "frictionSection", "frictionList", "recentEmpty", "recentActions", "eventCoverage", "liveAiToggle", "liveAiStatus", "liveAiResult", "liveAiProvenance", "liveAiSummary", "liveAiIntent", "liveAiIssue", "liveAiEvidence"].map(id => [id, document.getElementById(id)]));
-const POLL_MS = 1000;
+const POLL_MS = 500;
 const STATUS_TIMEOUT_MS = 6000;
 let snapshot = {};
 let checkedAt = null;
@@ -296,7 +296,7 @@ document.addEventListener("visibilitychange", () => {
   if (visible()) poll();
 });
 const pollTimer = setInterval(poll, POLL_MS);
-const freshnessTimer = setInterval(() => {render(); maybeAnalyze();}, 1000);
+const freshnessTimer = setInterval(() => {render(); maybeAnalyze();}, 500);
 window.addEventListener("pagehide", () => {
   disableAI();
   closed = true;
