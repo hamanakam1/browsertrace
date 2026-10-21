@@ -73,3 +73,4 @@ footer { border-top: 1px solid #d5dfd7; padding-top: 8px; font-size: 10px; line-
 footer p { margin: 0 0 4px; }
 @media (max-width: 340px) { .power-panel { padding: 13px 12px 10px; } main { padding: 10px; } h1 { font-size: 21px; } .power-actions .button { flex-basis: 120px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+ 
