@@ -58,7 +58,7 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
-    assert.equal(manifest.version, "1.3.0");
+    assert.equal(manifest.version, "1.3.1");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
