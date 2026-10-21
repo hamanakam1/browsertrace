@@ -6,7 +6,7 @@ Panther separates browser capture and draft review from destination delivery. AI
 
 Choose **Save draft edits**, then **Export JSON** in the review UI. Exports contain the currently saved drafts, source metadata, bounded evidence references, and explicit authority flags. They do not contain screenshot image data, video files, raw event arrays, local filesystem paths, or destination credentials.
 
-The export has `schema_version: "1.0"`. The `schema` value identifies this documented contract; it is not a hosted JSON Schema validator. This abbreviated synthetic example uses the actual field names:
+The export has `schema_version: "1.0"`. The `schema` value identifies this documented contract. The machine-readable [Draft 2020-12 JSON Schema](../schemas/intent-bundle.schema.json) defines the supported fields, bounds, and fixed review/authority flags. Validation establishes structure, not evidence truth or delivery. This abbreviated synthetic example uses the actual field names:
 
 ```json
 {
@@ -70,6 +70,14 @@ The export has `schema_version: "1.0"`. The `schema` value identifies this docum
 Recording times are Unix seconds; event references use Unix milliseconds. `event_index` is one-based within the observed event list. A reference is evidence provenance, not proof of the proposed change or a promise that an image is embedded. Source URLs are sanitized. Some optional metadata may be missing from older captures.
 
 Observed drafts summarize actions and the supplied goal without a model. AI drafts identify their model, mode, and generation revision. Their `hypothesis` and `suggested_verification_steps` are unverified proposals kept separately from `steps_to_reproduce`, which is derived from captured events. `proposal_verified: false` means the proposed problem has not been established by those events. Preserve those distinctions in downstream tools. Preserve unresolved questions and missing acceptance criteria instead of inventing certainty. Draft IDs remain stable for the recording, generation mode, and draft position; editing a draft does not create a new identity.
+
+### Versioning and validation
+
+Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.0 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
+
+There is no automatic bundle migration or importer in this release. Any future migration must preserve capture/draft identities, provenance, unresolved questions, and the distinction between observations and proposals. It must never turn `execution_authorized` on, remove review requirements, rewrite existing delivery receipts, or silently submit to another system. Keep the original artifact alongside a migrated one.
+
+Schema regressions validate real observed-mode exports and real generator/exporter output with a mocked AI response. Install the test-only `jsonschema==4.26.0` dependency to run the full validator suite; it is not needed by the backend at runtime. CI installs it explicitly. Tests report validator skips, rather than passing structural checks off as JSON Schema validation, when it is unavailable locally.
 
 ## AI Dashboard adapter
 

@@ -79,6 +79,105 @@ class StorageTests(unittest.TestCase):
             self.create()
         self.assertEqual(storage.MANIFEST_FILE.read_text(), "invalid JSON")
 
+    def test_retention_does_not_delete_artifacts_from_corrupt_metadata(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "retained.json"
+        events.write_bytes(b"retained capture")
+        rid = self.create(events_path=events)
+        original = storage._load_manifest()
+        for timestamp in (None, "yesterday", -1, True, float("nan"), float("inf")):
+            with self.subTest(timestamp=timestamp):
+                damaged = json.loads(json.dumps(original))
+                if timestamp is None:
+                    damaged[rid].pop("created_at")
+                else:
+                    damaged[rid]["created_at"] = timestamp
+                # Deliberately model an externally corrupted file, including
+                # nonfinite values that the normal writer refuses to emit.
+                storage.MANIFEST_FILE.write_text(json.dumps(damaged))
+                before = storage.MANIFEST_FILE.read_bytes()
+                with self.assertRaises(ValueError):
+                    storage.list_recordings()
+                self.assertEqual(events.read_bytes(), b"retained capture")
+                self.assertEqual(storage.MANIFEST_FILE.read_bytes(), before)
+
+    def test_corrupt_identity_and_path_fail_before_deleting_any_artifact(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "retained.json"
+        events.write_bytes(b"retained capture")
+        rid = self.create(events_path=events)
+        original = storage._load_manifest()
+        for key, value in (("id", "different-record"), ("screenshots_path", str(self.root.parent / "outside.json")), ("inference", [])):
+            with self.subTest(field=key):
+                damaged = json.loads(json.dumps(original))
+                damaged[rid][key] = value
+                storage.write_json(storage.MANIFEST_FILE, damaged)
+                before = storage.MANIFEST_FILE.read_bytes()
+                with self.assertRaises(ValueError):
+                    storage.delete_recording(rid)
+                self.assertEqual(events.read_bytes(), b"retained capture")
+                self.assertEqual(storage.MANIFEST_FILE.read_bytes(), before)
+
+    def test_failed_deletion_commit_preserves_existing_capture(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "retained.json"
+        events.write_bytes(b"retained capture")
+        rid = self.create(events_path=events)
+        before = storage.MANIFEST_FILE.read_bytes()
+        with patch.object(storage, "_save_manifest", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                storage.delete_recording(rid)
+        self.assertEqual(events.read_bytes(), b"retained capture")
+        self.assertEqual(storage.MANIFEST_FILE.read_bytes(), before)
+
+    def test_interrupted_deletion_is_durable_and_resumes_on_next_read(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "removing.json"
+        events.write_bytes(b"synthetic capture")
+        rid = self.create(events_path=events)
+        save = storage._save_manifest
+        calls = 0
+
+        def fail_final_save(manifest):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("final save interrupted")
+            save(manifest)
+
+        with patch.object(storage, "_save_manifest", side_effect=fail_final_save):
+            with self.assertRaises(OSError):
+                storage.delete_recording(rid)
+        self.assertTrue(storage._load_manifest()[rid]["_deleting"])
+        self.assertFalse(events.exists())
+        self.assertEqual(storage.list_recordings(), [])
+        self.assertEqual(storage._load_manifest(), {})
+
+    def test_cap_eviction_commit_failure_preserves_old_capture(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "old.json"
+        events.write_bytes(b"retained until committed")
+        old_id = self.create(events_path=events)
+        with patch.object(storage, "MAX_RECORDINGS", 1), \
+             patch.object(storage, "_save_manifest", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                self.create()
+        self.assertEqual(events.read_bytes(), b"retained until committed")
+        self.assertEqual([row["id"] for row in storage.list_recordings()], [old_id])
+
+    def test_cap_eviction_removes_only_oldest_capture_and_derived_data(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "oldest.json"
+        events.write_bytes(b"oldest synthetic capture")
+        oldest = self.create(events_path=events)
+        tickets.save_tickets(oldest, tickets.generate_drafts(storage.get_recording(oldest), []))
+        second = self.create()
+        with patch.object(storage, "MAX_RECORDINGS", 2):
+            newest = self.create()
+            self.assertEqual({row["id"] for row in storage.list_recordings()}, {second, newest})
+        self.assertFalse(events.exists())
+        self.assertFalse((self.root / "tickets" / f"{oldest}.json").exists())
+
     def test_invalid_paths_and_ids_are_rejected(self):
         for invalid in ("../secret", "a/b", "a\\b", "", ".", "x" * 81):
             with self.assertRaises(ValueError):

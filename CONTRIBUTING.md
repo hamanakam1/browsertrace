@@ -25,6 +25,15 @@ curl http://127.0.0.1:7890/api/extension/health
 ```
 
 ### Unit tests
+
+The backend and core test suite require no third-party runtime packages. For complete JSON Schema validation, install the test-only validator in a virtual environment:
+
+```bash
+python3 -m pip install jsonschema==4.26.0
+```
+
+Then run:
+
 ```bash
 node --test tests/*.mjs
 python3 -B -m unittest discover -s tests -p 'test_*.py' -v
@@ -45,7 +54,7 @@ Any feature that captures or stores user data must:
 - Show a visible indicator while active
 - Allow user deletion
 
-Use temporary `PANTHER_DATA_DIR` storage and synthetic dashboard endpoints for automated tests. Never create live dashboard tickets as a smoke test. Report unit tests, loaded-browser checks, local model checks, and confirmed live ticket delivery separately. CI runs dependency-free JavaScript and Python regressions, then retains an unpackable Chromium extension ZIP.
+Use temporary `PANTHER_DATA_DIR` storage and synthetic dashboard endpoints for automated tests. Never create live dashboard tickets as a smoke test. Report unit tests, loaded-browser checks, local model checks, and confirmed live ticket delivery separately. CI runs JavaScript, Python, and JSON Schema regressions, then retains an unpackable Chromium extension ZIP. If `jsonschema` is unavailable locally, seven validator tests explicitly skip; the remaining structural tests are not equivalent validation.
 
 ## Questions
 

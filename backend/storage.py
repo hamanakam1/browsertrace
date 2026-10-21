@@ -100,6 +100,7 @@ def create_recording(
     with DATA_LOCK:
         ensure_dirs()
         manifest = _load_manifest()
+        _enforce_ttl_and_cap(manifest)
         if recording_id in manifest:
             return recording_id
         for path in paths.values():
@@ -128,11 +129,12 @@ def create_recording(
 
 
 def get_recording(recording_id: str) -> Optional[Dict[str, Any]]:
+    recording_id = _safe_id(recording_id)
     with DATA_LOCK:
         ensure_dirs()
         manifest = _load_manifest()
         _enforce_ttl_and_cap(manifest)
-        return manifest.get(_safe_id(recording_id))
+        return manifest.get(recording_id)
 
 
 def list_recordings() -> List[Dict[str, Any]]:
@@ -166,11 +168,25 @@ def _delete_artifacts(recording_id: str, entry: Dict[str, Any]) -> None:
                         candidates.append(path)
                 except (ValueError, OSError):
                     continue
-    for value in candidates:
-        if value:
-            path = _owned_path(value)
-            if path and path.is_file():
-                path.unlink()
+    # Resolve every target before removing any file. A corrupt path must not
+    # leave a partly deleted capture before its validation error is reported.
+    paths = {_owned_path(value) for value in candidates if value}
+    for path in paths:
+        if path and path.is_file():
+            path.unlink()
+
+
+def _remove_recordings(manifest: Dict[str, Any], recording_ids: List[str]) -> None:
+    """Commit removal intent before unlinking; interrupted cleanup is retryable."""
+    if not recording_ids:
+        return
+    for recording_id in recording_ids:
+        manifest[recording_id]["_deleting"] = True
+    _save_manifest(manifest)
+    for recording_id in recording_ids:
+        _delete_artifacts(recording_id, manifest[recording_id])
+        del manifest[recording_id]
+    _save_manifest(manifest)
 
 
 def delete_recording(recording_id: str) -> bool:
@@ -181,9 +197,7 @@ def delete_recording(recording_id: str) -> bool:
         entry = manifest.get(recording_id)
         if entry is None:
             return False
-        _delete_artifacts(recording_id, entry)
-        del manifest[recording_id]
-        _save_manifest(manifest)
+        _remove_recordings(manifest, [recording_id])
         return True
 
 
@@ -223,6 +237,28 @@ def _load_manifest() -> Dict[str, Any]:
     payload = json.loads(MANIFEST_FILE.read_text())
     if not isinstance(payload, dict):
         raise ValueError("Invalid capture manifest")
+    # Retention must never infer a missing/invalid timestamp as epoch zero and
+    # delete recoverable artifacts. Validate all entries before any cleanup.
+    for recording_id, entry in payload.items():
+        _safe_id(recording_id)
+        if not isinstance(entry, dict) or entry.get("id") != recording_id:
+            raise ValueError("Invalid capture manifest entry")
+        created_at = entry.get("created_at")
+        if (not isinstance(created_at, (int, float)) or isinstance(created_at, bool)
+                or not math.isfinite(created_at) or created_at <= 0):
+            raise ValueError("Invalid capture retention timestamp; stored artifacts were preserved")
+        if "_deleting" in entry and not isinstance(entry["_deleting"], bool):
+            raise ValueError("Invalid capture deletion state")
+        inference = entry.get("inference")
+        if inference is not None and not isinstance(inference, dict):
+            raise ValueError("Invalid capture inference metadata")
+        paths = [entry.get(key) for key in ("video_path", "events_path", "screenshots_path")]
+        paths.append((inference or {}).get("result_path"))
+        for value in paths:
+            if value and not isinstance(value, str):
+                raise ValueError("Invalid capture artifact path")
+            if value:
+                _owned_path(value)
     return payload
 
 
@@ -232,12 +268,9 @@ def _save_manifest(manifest: Dict[str, Any]) -> None:
 
 def _enforce_ttl_and_cap(manifest: Dict[str, Any]) -> None:
     now = time.time()
-    expired = [rid for rid, entry in manifest.items() if now - entry.get("created_at", 0) > TTL_SECONDS]
+    expired = [rid for rid, entry in manifest.items()
+               if entry.get("_deleting") or now - entry["created_at"] > TTL_SECONDS]
     survivors = sorted(((rid, entry) for rid, entry in manifest.items() if rid not in expired),
-                       key=lambda item: item[1].get("created_at", 0))
+                       key=lambda item: item[1]["created_at"])
     expired += [rid for rid, _ in survivors[:max(0, len(survivors) - MAX_RECORDINGS)]]
-    for rid in expired:
-        _delete_artifacts(rid, manifest[rid])
-        del manifest[rid]
-    if expired:
-        _save_manifest(manifest)
+    _remove_recordings(manifest, expired)

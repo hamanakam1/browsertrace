@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hamanakam1/panther-intent-capture/main/schemas/intent-bundle.schema.json",
+  "title": "Panther portable intent bundle 1.0",
+  "description": "Destination-independent export of reviewable browser-evidence drafts. Observed actions, unverified hypotheses, and proposed verification steps remain separate. Schema validation establishes structure, not truth, successful delivery, or permission to execute. No raw event payloads, image bytes, or local artifact paths belong in this bundle.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schema_version", "producer", "exported_at", "recording", "tickets", "authority"],
+  "properties": {
+    "schema": { "const": "https://github.com/hamanakam1/panther-intent-capture#intent-bundle" },
+    "schema_version": { "const": "1.0" },
+    "producer": { "const": "panther-intent-capture" },
+    "exported_at": { "type": "number", "minimum": 0, "description": "Export creation time as Unix seconds, possibly fractional; not an evidence-verification time." },
+    "recording": { "$ref": "#/$defs/recording" },
+    "tickets": { "type": "array", "items": { "$ref": "#/$defs/ticket" }, "description": "Drafts exported for human review. An empty array is valid when generation produced no proposals." },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["export_only", "requires_review", "execution_authorized"],
+      "properties": {
+        "export_only": { "const": true },
+        "requires_review": { "const": true },
+        "execution_authorized": { "const": false }
+      },
+      "description": "Exporting or importing this artifact never authorizes execution or delivery. Destination-specific approval remains a separate operation."
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])",
+      "description": "Stable producer identity, not a filesystem path or a destination ticket number."
+    },
+    "sourceUrl": {
+      "type": "string",
+      "maxLength": 1200,
+      "pattern": "^(?:https?://[^/?#@\\s]+(?:[/?#][^\\s]*)?)?(?![\\s\\S])",
+      "description": "Sanitized HTTP(S) source location, or an empty string when unavailable. Credentials are excluded. Schema validation cannot determine whether an arbitrary URL path or text is sensitive."
+    },
+    "shortText": { "type": "string", "maxLength": 300 },
+    "stringList": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1200, "pattern": "\\S" }
+    },
+    "recording": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source_url", "title", "stated_goal", "capture_mode"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "source_url": { "$ref": "#/$defs/sourceUrl" },
+        "title": { "$ref": "#/$defs/shortText" },
+        "stated_goal": { "type": "string", "maxLength": 2000, "description": "The person's supplied goal; an empty string means no goal was provided. It must not be treated as inferred intent." },
+        "capture_mode": { "type": "string", "maxLength": 30, "description": "Producer capture mode, currently events or video; empty for legacy captures without mode metadata." },
+        "start_time": { "type": "number", "minimum": 0, "description": "Capture start as Unix seconds, possibly fractional." },
+        "end_time": { "type": "number", "minimum": 0, "description": "Capture end as Unix seconds, possibly fractional. Consumers should additionally check end_time is not before start_time." },
+        "duration_ms": { "type": "number", "minimum": 0, "description": "Capture duration in milliseconds." },
+        "event_count": { "type": "integer", "minimum": 0, "description": "Total stored events, which may exceed the subset used to generate a draft." },
+        "screenshot_count": { "type": "integer", "minimum": 0, "description": "Number of captured screenshots, not a claim that an inference model analyzed them." }
+      }
+    },
+    "evidenceReference": {
+      "description": "Bounded evidence identifier only. Strings exclude local absolute paths and data/file URI prefixes. Object references contain no raw events or image content; timestamp units are stated by their field names.",
+      "oneOf": [
+        { "type": "string", "maxLength": 200, "pattern": "^(?!/|~|file:|data:)" },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": ["string", "number"], "maxLength": 200 },
+            "kind": { "type": "string", "maxLength": 200 },
+            "type": { "type": "string", "maxLength": 200 },
+            "event_index": { "type": "integer", "minimum": 1, "description": "1-based index into the recorded event sequence used for generation." },
+            "frame_index": { "type": "integer", "minimum": 0, "description": "Producer frame identifier; resolve its index convention against the original capture." },
+            "timestamp": { "type": "number", "minimum": 0, "description": "Legacy timestamp with unspecified units; do not assume milliseconds or seconds without producer context." },
+            "timestamp_ms": { "type": "number", "minimum": 0, "description": "Event timestamp in Unix milliseconds." },
+            "timestamp_seconds": { "type": "number", "minimum": 0, "description": "Timestamp in seconds; resolve whether absolute or relative from the reference kind and original capture." }
+          }
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "description": "Bounded producer metadata. Legacy exports can omit mode, revision, and counts; absence means unknown. Observed mode summarizes recorded actions; AI mode supplies unverified proposals. Neither an origin label nor a confidence value grants execution authority.",
+      "properties": {
+        "origin": { "$ref": "#/$defs/shortText", "description": "Current values are observed_evidence or unverified_proposal; older producers may supply labels such as model_proposal. An origin label alone does not verify a claim." },
+        "producer": { "$ref": "#/$defs/shortText" },
+        "recording_id": { "$ref": "#/$defs/shortText" },
+        "mode": { "enum": ["observed", "ai"] },
+        "model": { "type": ["string", "null"], "maxLength": 300, "description": "Configured local model identifier; null for evidence-only generation. Naming a model does not prove model invocation or output quality." },
+        "generation_revision": { "type": "integer", "minimum": 1 },
+        "evidence_kind": { "$ref": "#/$defs/shortText", "description": "Current producer uses observed_events even for AI proposals: the observations and proposed issue remain distinct." },
+        "proposal_verified": { "type": "boolean", "description": "The current producer emits false. A true legacy value is only a provenance assertion, not proof of validation or permission to execute." },
+        "generator": { "$ref": "#/$defs/shortText" },
+        "inference_kind": { "$ref": "#/$defs/shortText" },
+        "evidence_mode": { "$ref": "#/$defs/shortText" },
+        "created_at": { "type": ["number", "string", "null"], "maxLength": 300, "description": "Optional legacy producer timestamp. Consult the producer for string format or numeric units." },
+        "confidence": { "type": ["number", "string", "null"], "maxLength": 300, "description": "Optional uncalibrated producer confidence; it must not be treated as evidence that a bug exists." },
+        "warning": { "$ref": "#/$defs/shortText" },
+        "event_count": { "type": "integer", "minimum": 0 },
+        "events_total": { "type": "integer", "minimum": 0 },
+        "events_truncated": { "type": "boolean" },
+        "screenshots_count": { "type": "integer", "minimum": 0 },
+        "media_analyzed": { "type": "boolean", "description": "Whether media frames were analyzed for this generation. Captured screenshots or exported frame references alone do not imply analysis." }
+      }
+    },
+    "ticket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "description", "hypothesis", "steps_to_reproduce", "suggested_verification_steps", "acceptance_criteria", "desired_behavior", "questions", "component", "priority", "evidence", "evidence_refs", "screenshot_timestamps", "source_url", "provenance", "status", "requires_review", "execution_authorized"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
+        "description": { "type": "string", "maxLength": 12000, "description": "Draft description or stated goal. For AI drafts it is explicitly an unverified proposal, not a confirmed defect." },
+        "hypothesis": { "type": "string", "maxLength": 2000, "description": "Unverified proposed explanation or issue. Current observed-only generation leaves this empty; it must remain separate from observed evidence." },
+        "steps_to_reproduce": { "$ref": "#/$defs/stringList", "description": "Steps summarized from observed actions. They do not establish that a failure occurred or that an issue has been reproduced." },
+        "suggested_verification_steps": { "$ref": "#/$defs/stringList", "description": "Proposed future checks, especially model-generated instructions. These steps are not recorded observations or proof that a check ran." },
+        "acceptance_criteria": { "$ref": "#/$defs/stringList", "description": "Proposed conditions for future acceptance; an empty list means they still need to be defined." },
+        "desired_behavior": { "type": "string", "maxLength": 2000, "description": "Stated or proposed desired behavior; empty when unknown. Consult provenance and stated_goal to distinguish the person's intent from a model suggestion." },
+        "questions": { "$ref": "#/$defs/stringList", "maxItems": 5 },
+        "component": { "type": "string", "maxLength": 200 },
+        "priority": { "type": "string", "maxLength": 20, "description": "Proposed priority label; current generation emits low, medium, or high. This is not scheduling or execution authority." },
+        "evidence": { "type": "string", "maxLength": 6000, "description": "Observed-context summary. Recorded actions alone cannot prove that a proposed bug exists." },
+        "evidence_refs": { "type": "array", "maxItems": 30, "items": { "$ref": "#/$defs/evidenceReference" } },
+        "screenshot_timestamps": { "type": "array", "maxItems": 20, "items": { "type": "number", "minimum": 0 }, "description": "Legacy frame offsets in seconds. These are references only, with no image content and no assertion that media was analyzed." },
+        "source_url": { "$ref": "#/$defs/sourceUrl" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "status": { "const": "draft" },
+        "requires_review": { "const": true },
+        "execution_authorized": { "const": false }
+      }
+    }
+  }
+}

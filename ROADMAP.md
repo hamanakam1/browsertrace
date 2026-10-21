@@ -14,6 +14,7 @@ The product goal is to make a user's observed workflow and desired change unders
 - Explicit local AI generation with provenance and visible errors.
 - Review UI with editable title, description, and acceptance criteria.
 - Destination-neutral, versioned JSON export with evidence references.
+- Formal Draft 2020-12 intent-bundle schema, positive/negative validation tests, and explicit version-migration policy.
 - AI Dashboard preview and confirmed single-draft submission, deterministic identity, durable delivery receipts, and independent readback.
 - Backlog and `no-auto` fences on dashboard submissions; no execution authorization.
 - Synthetic browser-controller, HTTP, storage, inference, and delivery contract tests.
@@ -31,7 +32,6 @@ These are implementation claims. Synthetic tests are not evidence of loaded-exte
 
 ## Next: make integrations easier to extend
 
-- Publish a formal JSON Schema and version-migration policy for intent bundles.
 - Add destination adapters behind the same preview, confirmation, idempotency, and delivery-receipt contract.
 - Prioritize a GitHub issue adapter and a configurable local importer after the AI Dashboard workflow is qualified.
 - Add destination setup and capability discovery without exposing credentials to captured pages.

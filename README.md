@@ -72,6 +72,8 @@ Submitted tickets contain a bounded summary of intent, observed evidence, reprod
 
 For another system, use **Export JSON** and map the versioned intent bundle into that system's own draft or issue format. The capture and review workflow is independent of the destination. See [integration contracts and adapter guidance](docs/INTEGRATIONS.md) for the export shape, HTTP routes, retry behavior, and configuration.
 
+Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to validate an importer against the supported version 1.0 contract. Schema validation does not verify a proposed bug or authorize execution.
+
 ## Local AI and configuration
 
 All settings below are backend environment variables. Set them before starting the server.
@@ -114,6 +116,8 @@ python3 -B -m unittest discover -s tests -p 'test_*.py'
 ```
 
 The Python tests use temporary data directories and fake loopback dashboard/inference servers. The JavaScript tests exercise capture state and redaction with browser API doubles. Passing them does not establish that the unpacked extension has been installed and exercised in a real browser, that a particular local AI model works, or that a live AI Dashboard ticket has been accepted. Those are separate checks using a harmless, consented capture and explicit delivery confirmation.
+
+The optional test-only `jsonschema==4.26.0` dependency enables full export-schema validation; CI installs it explicitly. Without it, validator cases report skips. See [contributor verification instructions](CONTRIBUTING.md#unit-tests).
 
 See the [1.1.0 test results and pilot limits](docs/TEST_RESULTS.md) for the automated and real-browser evidence. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
 
