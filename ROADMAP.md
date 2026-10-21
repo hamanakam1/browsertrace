@@ -62,3 +62,4 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 ## Design commitments
 
 Capture requires an explicit start on a chosen page. Evidence and inference must be distinguishable. Failures remain visible. Delivery requires either manual review confirmation or a distinct, bounded session opt-in to send unreviewed proposals. Delivery remains separate from execution: Panther captures intent and creates tickets, never implements them. Local defaults and deliberate exports preserve the user's control over where captured information goes.
+
