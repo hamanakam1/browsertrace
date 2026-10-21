@@ -1,5 +1,23 @@
 # Panther Intent Capture
 
+```text
+        ⠀⠀⠀⠀⢀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣄⠀⠀⠀⠀
+        ⠀⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀
+        ⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠀⠀
+        ⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀
+        ⠀⣿⣿⣿    (o)   (o)    ⣿⣿⣿⠀⠀
+        ⠀⣿⣿⣿        △        ⣿⣿⣿⠀⠀
+        ⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀
+        ⠀⠀⠙⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀
+
+   ┌─────────────────────────────────┐
+   │     PANTHER INTENT CAPTURE       │
+   │                                 │
+   │     (panther watches browser)    │
+   │                                 │
+   └─────────────────────────────────┘
+```
+
 Turn a browser session into a clear, reviewable request for improvement.
 
 Panther records the interactions you choose to capture, keeps the evidence on your computer, and helps you explain what should change. Review the resulting draft, add the expected outcome, then send it to AI Dashboard or export JSON for another system.
