@@ -1,5 +1,7 @@
 # Panther 1.1.0 verification
 
+Historical report for 1.1.0. See [1.2.0 automation verification](AUTOMATION_TEST_RESULTS.md) for the newer test totals, automatic recovery checks, and successful bounded live-delivery pilot. The limits below describe what had been qualified at this earlier checkpoint.
+
 Tested on 2026-10-21. This report distinguishes automated contract tests, a real browser smoke test, and work that still needs a consented pilot. It is not a claim that every website, browser, or destination works.
 
 ## Automated checks

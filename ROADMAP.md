@@ -16,10 +16,13 @@ The product goal is to make a user's observed workflow and desired change unders
 - Destination-neutral, versioned JSON export with evidence references.
 - Formal Draft 2020-12 intent-bundle schema, positive/negative validation tests, and explicit version-migration policy.
 - AI Dashboard preview and confirmed single-draft submission, deterministic identity, durable delivery receipts, and independent readback.
+- Separately consented automatic capture-to-ticket delivery: frozen destination and proposals, a five-ticket session cap, 24-hour expiry, bounded retries, durable restart recovery, visible progress, and cancellation.
 - Backlog and `no-auto` fences on dashboard submissions; no execution authorization.
 - Synthetic browser-controller, HTTP, storage, inference, and delivery contract tests.
 
 These are implementation claims. Synthetic tests are not evidence of loaded-extension acceptance, live model quality, live dashboard delivery, or cross-site compatibility.
+
+The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately records a loaded-Chromium capture/recovery test and one consented synthetic-page capture delivered to a live AI Dashboard. It does not establish real-world Dashboard-page capture quality or broad site compatibility.
 
 ## Next: qualify the complete user workflow
 
@@ -56,4 +59,4 @@ These are implementation claims. Synthetic tests are not evidence of loaded-exte
 
 ## Design commitments
 
-Capture requires an explicit start on a chosen page. Evidence and inference must be distinguishable. Failures remain visible and retryable. Review comes before delivery, and delivery remains separate from execution. Local defaults and deliberate exports preserve the user's control over where captured information goes.
+Capture requires an explicit start on a chosen page. Evidence and inference must be distinguishable. Failures remain visible. Delivery requires either manual review confirmation or a distinct, bounded session opt-in to send unreviewed proposals. Delivery remains separate from execution: Panther captures intent and creates tickets, never implements them. Local defaults and deliberate exports preserve the user's control over where captured information goes.

@@ -1,4 +1,5 @@
 import { BACKEND_ORIGIN } from "../shared/constants.js";
+import { automationView, safeTicketURL } from "./automation-state.js";
 
 const origin = location.protocol === "chrome-extension:" ? BACKEND_ORIGIN : location.origin;
 const $ = id => document.getElementById(id);
@@ -7,6 +8,13 @@ let recordings = [];
 let activePreview = null;
 let loading = false;
 let requestVersion = 0;
+let automation = null;
+let automationStale = false;
+let automationTimer = null;
+let renderedDraftCount = 0;
+let automationRequest = 0;
+let automationControlBusy = false;
+const busyButtons = new WeakSet();
 
 function message(text, error = false) {
   $("message").textContent = text;
@@ -19,18 +27,97 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     signal: AbortSignal.timeout(path.startsWith("tickets/") ? 125000 : 30000)
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || result.message || result.state || "Request failed");
+  if (!response.ok) {
+    const error = new Error(result.error || result.message || result.state || "Request failed");
+    error.status = response.status; throw error;
+  }
   return result;
 }
 function button(label, action, className = "") {
   const node = document.createElement("button");
   node.textContent = label; node.className = className;
   node.addEventListener("click", async () => {
-    node.disabled = true;
+    busyButtons.add(node); node.disabled = true;
     try { await action(); } catch (error) { message(error.message, true); }
-    finally { node.disabled = false; }
+    finally { busyButtons.delete(node); node.disabled = false; syncDraftControls(); }
   });
   return node;
+}
+function syncDraftControls() {
+  const locked = loading || (selected && automationView(automation, automationStale).locked);
+  $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
+  for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
+}
+function renderAutomation() {
+  const view = automationView(automation, automationStale);
+  $("automationPanel").hidden = view.hidden;
+  $("automationStatus").textContent = view.text + (automation?.error ? " " + automation.error : "");
+  const next = automation?.next_retry_at;
+  $("automationMeta").textContent = [
+    automation?.target_url ? "Destination: " + automation.target_url : "Destination not yet confirmed",
+    automation?.use_ai ? "Local AI proposals" : "Observed-evidence proposals",
+    "Attempts: " + (automation?.attempts || 0),
+    Number.isFinite(next) && next > 0 ? "Next retry: " + new Date(next * 1000).toLocaleString() : "",
+    "Drafts are frozen for the duration of automatic delivery; later edits do not update delivered tickets."
+  ].filter(Boolean).join(" · ");
+  $("retryAutomation").hidden = !view.retry;
+  $("cancelAutomation").hidden = !view.cancel;
+  $("retryAutomation").disabled = automationControlBusy;
+  $("cancelAutomation").disabled = automationControlBusy;
+  $("automationDeliveries").replaceChildren();
+  for (const delivery of automation?.deliveries || []) {
+    const verifiedAt = delivery.verified_at ?? delivery.receipt?.verified_at;
+    const when = Number.isFinite(verifiedAt) ? new Date(verifiedAt * 1000).toLocaleString() : "time unavailable";
+    const row = element("li", delivery.verified
+      ? "Verified at " + when + " — this is historical delivery evidence, not a fresh check of the ticket's execution fence."
+      : "Delivery state: " + (delivery.state || "unknown"));
+    const href = safeTicketURL(delivery.ticket_url, automation.target_url);
+    if (href) {
+      const link = element("a", " Open ticket"); link.href = href; link.target = "_blank"; link.rel = "noopener"; row.append(link);
+    }
+    $("automationDeliveries").append(row);
+  }
+  syncDraftControls();
+}
+async function pollAutomation(id = selected?.id, version = requestVersion) {
+  const poll = ++automationRequest;
+  clearTimeout(automationTimer);
+  if (!id || document.visibilityState === "hidden") return;
+  try {
+    const job = await api("automation/" + id);
+    if (poll !== automationRequest || version !== requestVersion || selected?.id !== id) return;
+    automation = job; automationStale = false; renderAutomation();
+    if (job.ticket_count > 0 && renderedDraftCount === 0) {
+      try {
+        const drafts = await api("tickets/" + id);
+        if (poll === automationRequest && version === requestVersion && selected?.id === id) renderTickets(drafts, id);
+      } catch (_) { /* Job status is still useful while drafts become available. */ }
+    }
+  } catch (error) {
+    if (poll !== automationRequest || version !== requestVersion || selected?.id !== id) return;
+    automationStale = true; renderAutomation();
+    $("automationStatus").textContent += " " + error.message;
+  }
+  if (poll === automationRequest && version === requestVersion && selected?.id === id && document.visibilityState !== "hidden" && automationView(automation, automationStale).poll) {
+    automationTimer = setTimeout(() => pollAutomation(id, version), 2000);
+  }
+}
+async function controlAutomation(action) {
+  if (!selected || automationControlBusy) return;
+  const id = selected.id, version = requestVersion;
+  ++automationRequest; clearTimeout(automationTimer); automationControlBusy = true;
+  $("retryAutomation").disabled = true; $("cancelAutomation").disabled = true;
+  try {
+    await api("automation/" + id, {action});
+    if (version === requestVersion && selected?.id === id) await pollAutomation(id, version);
+  } catch (error) {
+    message(error.message, true);
+    if (version === requestVersion && selected?.id === id) await pollAutomation(id, version);
+  }
+  finally {
+    automationControlBusy = false;
+    if (version === requestVersion && selected?.id === id) renderAutomation();
+  }
 }
 function element(tag, text, className = "") {
   const node = document.createElement(tag);
@@ -68,9 +155,12 @@ function renderLibrary() {
 async function openCapture(id) {
   if (loading) return;
   const version = ++requestVersion;
+  clearTimeout(automationTimer);
   const [capture, evidence] = await Promise.all([api("recordings/" + id), api("recordings/" + id + "/events")]);
   if (version !== requestVersion) return;
   selected = capture;
+  automation = null; automationStale = false; renderedDraftCount = 0;
+  $("tickets").replaceChildren(); renderAutomation();
   $("emptyReview").hidden = true; $("captureView").hidden = false;
   $("captureTitle").textContent = capture.title || "Browser capture";
   $("captureMeta").textContent = capture.url + " · " + capture.event_count + " events · " + (capture.duration_ms / 1000).toFixed(1) + " seconds";
@@ -86,11 +176,16 @@ async function openCapture(id) {
   $("screenshots").replaceChildren();
   $("screenshotsPanel").hidden = !capture.screenshot_count;
   if (capture.screenshot_count) {
-    const shots = await api("recordings/" + id + "/screenshots");
-    if (version !== requestVersion) return;
-    for (const shot of shots.screenshots) {
-      const img = document.createElement("img"); img.src = shot.dataUrl; img.alt = "Captured page evidence"; img.loading = "lazy";
-      $("screenshots").append(img);
+    try {
+      const shots = await api("recordings/" + id + "/screenshots");
+      if (version !== requestVersion) return;
+      for (const shot of shots.screenshots) {
+        const img = document.createElement("img"); img.src = shot.dataUrl; img.alt = "Captured page evidence"; img.loading = "lazy";
+        $("screenshots").append(img);
+      }
+    } catch (error) {
+      if (version !== requestVersion) return;
+      $("screenshots").append(element("p", "Screenshot evidence unavailable: " + error.message));
     }
   }
   $("generationStatus").textContent = "";
@@ -106,23 +201,25 @@ async function openCapture(id) {
   }
   renderLibrary();
   const url = new URL(location.href); url.searchParams.set("recording", id); history.replaceState(null, "", url);
+  await pollAutomation(id, version);
 }
 async function generate(useAI) {
-  if (!selected || loading) return;
+  if (!selected || loading || automationView(automation, automationStale).locked) return;
   loading = true;
-  $("generate").disabled = true; $("generateAI").disabled = true;
+  syncDraftControls();
   $("generationStatus").textContent = useAI ? "Generating drafts with local AI… This can take up to two minutes." : "Preparing an evidence draft from captured interactions…";
   message("Draft generation in progress.");
   try {
     const data = await api("tickets/" + selected.id, {use_ai: useAI});
     renderTickets(data);
-    message(data.tickets.length + " draft(s) ready for review. Nothing has been sent.");
+    message(data.tickets.length + " draft(s) ready for review. This generation did not submit new tickets.");
   } catch (error) {
     $("generationStatus").textContent = "Generation failed: " + error.message + " Your capture is saved; you can retry.";
     message(error.message, true);
-  } finally { loading = false; $("generate").disabled = false; $("generateAI").disabled = false; }
+  } finally { loading = false; syncDraftControls(); }
 }
 function renderTickets(data, recordingId = selected.id) {
+  renderedDraftCount = data.tickets.length;
   $("tickets").replaceChildren();
   $("generationStatus").textContent = data.tickets.length + " draft(s) · " +
     (data.mode === "ai" ? "Local AI suggestions — verify against evidence" : "Observed steps only — intended outcome needs review");
@@ -171,10 +268,17 @@ function renderTickets(data, recordingId = selected.id) {
     card.append(actions);
     $("tickets").append(card);
   }
+  syncDraftControls();
 }
 $("refresh").addEventListener("click", refresh);
 $("generate").addEventListener("click", () => generate(false));
 $("generateAI").addEventListener("click", () => generate(true));
+$("retryAutomation").addEventListener("click", () => controlAutomation("retry"));
+$("cancelAutomation").addEventListener("click", () => controlAutomation("cancel"));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { ++automationRequest; clearTimeout(automationTimer); }
+  else if (selected) pollAutomation();
+});
 $("cancelSend").addEventListener("click", () => $("previewDialog").close());
 $("confirmSend").addEventListener("click", async () => {
   if (!activePreview) return;
@@ -205,7 +309,8 @@ $("deleteCapture").addEventListener("click", async () => {
   if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
   try {
     await api("recordings/" + selected.id, undefined, "DELETE");
-    selected = null; $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
+    ++requestVersion; clearTimeout(automationTimer); selected = null; automation = null;
+    $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
   } catch (error) { message(error.message, true); }
 });
 $("export").addEventListener("click", async () => {

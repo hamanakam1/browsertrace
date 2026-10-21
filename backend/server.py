@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from api.routes import handle_request  # noqa: E402
+from automation import start_worker, stop_worker  # noqa: E402
 
 PORT = int(os.environ.get("EXTENSION_BACKEND_PORT", "7890"))
 HOST = "127.0.0.1"
@@ -60,14 +61,16 @@ def main():
    │                                 │
    └─────────────────────────────────┘
 
-panther-intent-capture backend  v1.1.0   listening on http://{HOST}:{PORT}
+panther-intent-capture backend  v1.2.0   listening on http://{HOST}:{PORT}
 local capture  •  explicit consent  •  reviewable drafts  •  optional unredacted screenshots
     """.format(HOST=HOST, PORT=PORT))
+    start_worker()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop_worker()
         server.server_close()
 
 

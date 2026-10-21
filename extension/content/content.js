@@ -72,13 +72,17 @@
   function renderStatus(state) {
     if (!panel || !state?.ok) return;
     const labels = { recording: "Capturing", saving: "Saving recording…", pending: "Upload needs retry", generating: "Generating drafts…", ready: "Drafts ready", error: "Generation needs retry", idle: "Idle" };
-    statusText.textContent = `Panther · ${labels[state.status] || state.status}`;
-    const details = state.session?.error || state.result?.error ||
-      (state.status === "ready" ? `${state.result.ticketCount} reviewable draft${state.result.ticketCount === 1 ? "" : "s"} · ${state.result.eventCount} events` :
+    const job = state.result?.automation;
+    const deliveryLabels = { queued: "Delivery queued", generating: "Generating tickets…", delivering: "Delivering tickets…", retry_wait: "Delivery retry scheduled", delivered: "Tickets delivered", blocked: "Delivery blocked", cancelled: "Delivery cancelled" };
+    statusText.textContent = `Panther · ${state.result?.automationPolicy ? (state.result.error ? "Delivery needs attention" : deliveryLabels[job?.status] || "Checking delivery…") : labels[state.status] || state.status}`;
+    const details = state.session?.error || state.result?.error || job?.error ||
+      (state.result?.automationPolicy ? `${job?.delivered_count || 0}/${job?.ticket_count || 0} historical delivery receipts · review-only backlog; no work execution` :
+      state.status === "ready" ? `${state.result.ticketCount} reviewable draft${state.result.ticketCount === 1 ? "" : "s"} · ${state.result.eventCount} events` :
         `${state.session?.eventCount ?? state.result?.eventCount ?? 0} events · this tab only`);
     const warning = state.session?.warning || state.result?.warning;
     detailsText.textContent = `${details}${warning ? ` · ${warning}` : ""}`;
     stopButton.hidden = state.status !== "recording";
+    stopButton.textContent = state.session?.automation && !state.session.automationWithdrawn ? "Stop & deliver" : "Stop & generate";
     stopButton.disabled = false;
     reviewButton.hidden = !state.result?.id;
     if (state.status !== "recording") stopListening();
@@ -131,12 +135,13 @@
     statusTimer = setInterval(refreshStatus, 1000);
   }
 
-  function enable(id) {
+  function enable(id, automationEnabled = false) {
     if (sessionId === id) return;
     stopListening();
     sessionId = id;
     lastUrl = location.href;
     showPanel();
+    stopButton.textContent = automationEnabled ? "Stop & deliver" : "Stop & generate";
     // pushState is not observable from an isolated content world. Poll only
     // during active capture to include SPA routers and dashboard hash routes.
     routeTimer = setInterval(routeChanged, 500);
@@ -153,7 +158,7 @@
   // Every event is sent immediately, with no unload-time batch or Blob message.
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message.type === "extension.captureStart") {
-      enable(message.sessionId);
+      enable(message.sessionId, message.automationEnabled === true);
       reply({ ok: true });
     } else if (message.type === "extension.captureStop") {
       stopListening();

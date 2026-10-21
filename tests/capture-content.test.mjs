@@ -42,7 +42,7 @@ function fixture() {
   vm.runInContext(script, context);
   return {
     context, root, messages, listeners, windowListeners, timers,
-    start() { onMessage({ type: "extension.captureStart", sessionId: "session-1" }, {}, () => {}); },
+    start(automationEnabled = false) { onMessage({ type: "extension.captureStart", sessionId: "session-1", automationEnabled }, {}, () => {}); },
     stop() { onMessage({ type: "extension.captureStop" }, {}, () => {}); },
     state(value) { status = value; },
     dispatch(type, target, path = [target], isTrusted = true) {
@@ -67,6 +67,17 @@ test("content installs once, stays idle until Start, and renders isolated stop/r
   const box = panel.shadow.children[1];
   assert.equal(box.children[0].textContent, "Panther · Capturing");
   assert.equal(box.children[2].children[0].textContent, "Stop & generate");
+});
+
+test("automatic capture panel labels Stop honestly and reports historical delivery receipts without execution claims", async () => {
+  const f = fixture(); f.start(true);
+  const box = f.root.children[0].shadow.children[1];
+  assert.equal(box.children[2].children[0].textContent, "Stop & deliver");
+  f.state({ ok: true, status: "automation", session: null, result: { id: "rec", automationPolicy: {}, automation: { status: "cancelled", ticket_count: 2, delivered_count: 1 } } });
+  f.tick(1000); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(box.children[0].textContent, "Panther · Delivery cancelled");
+  assert.match(box.children[1].textContent, /1\/2 historical delivery receipts.*no work execution/);
+  assert.equal(box.children[2].children[0].hidden, true);
 });
 
 test("nested click targets resolve to dashboard semantic ancestors without recording panel clicks", () => {

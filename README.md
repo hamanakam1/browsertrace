@@ -20,7 +20,7 @@
 
 Turn a browser session into a clear, reviewable request for improvement.
 
-Panther records the interactions you choose to capture, keeps the evidence on your computer, and helps you explain what should change. Review the resulting draft, add the expected outcome, then send it to AI Dashboard or export JSON for another system.
+Panther records the interactions you choose to capture, keeps the evidence on your computer, and turns intent into tickets. Opt into automatic delivery for a session to save, generate, deliver to AI Dashboard, and verify without a separate click for each ticket. Or use manual review and JSON export. **Panther creates tickets; it does not implement the work.**
 
 The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. It works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
@@ -33,6 +33,7 @@ The current implementation targets Chrome and Microsoft Edge 116+ with a Manifes
 - **Optional local AI:** explicitly choose **Generate with local AI** for proposed intents and task decomposition using your configured local Ollama model. No paid or remote inference fallback is used.
 - **Human review:** inspect events and any screenshots, edit the title, problem statement, and acceptance criteria, and save draft edits locally.
 - **AI Dashboard delivery:** preview the exact ticket, then confirm one draft at a time. The adapter creates a backlog ticket with `no-auto`, preserves capture identity for retries, and independently reads it back before showing verified delivery.
+- **Opt-in end-to-end automation:** before Start, choose automatic delivery to the displayed AI Dashboard destination. After Stop, Panther saves the capture, generates unreviewed proposals, delivers up to five, and verifies each ticket. If generation exceeds the cap, the whole job blocks before sending. Progress, retry timing, counts, and cancellation are visible. Durable jobs recover after backend restarts; bounded retries reuse the same identities.
 - **Portable JSON:** export the same draft and provenance for another tool. Additional destinations need an adapter or importer; GitHub, Jira, Linear, and arbitrary native apps are not built-in integrations yet.
 
 Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
@@ -56,17 +57,19 @@ Load the extension:
 3. Pin Panther in the browser toolbar. The default `extension/manifest.json` works for both supported browsers; no manifest swapping is needed.
 4. Open the website you want to improve, such as AI Dashboard at `http://127.0.0.1:7878/`.
 5. Open Panther, enable capture consent, and write a short goal in **What should improve?** Keep screenshots off unless you want to retain visible page pixels.
-6. Click **Start capture**, reproduce the workflow, then choose **Stop & generate drafts** in the popup or page panel.
-7. Click **Review drafts**. Check the observed steps, describe the problem or improvement, and add a verifiable expected result.
-8. Choose **Save draft edits** before exporting JSON, or **Preview AI Dashboard ticket** to inspect the exact outbound payload. **Send this reviewed ticket** performs the dashboard write.
+6. For an automated session, enable **Automatically deliver tickets to AI Dashboard** and check the displayed destination. Optionally enable local AI; otherwise evidence-only generation needs no model. These choices apply only to this session.
+7. Click **Start capture**, reproduce the workflow, then stop using the popup or floating panel. With automation enabled, saving, generation, delivery, and independent verification run automatically; watch the status and verified count. You can cancel remaining delivery, but not undo tickets already submitted.
+8. With automation off, click **Review drafts**, check the observed steps, describe the problem or improvement, and add a verifiable expected result. Choose **Save draft edits** before exporting JSON, or **Preview AI Dashboard ticket**, then **Send this reviewed ticket** for manual delivery.
 
 Capture stops when you leave the chosen origin, close the tab, revoke capture consent, or reach the event limit. Same-origin reloads and SPA navigation are supported. A browser restart leaves an interrupted capture available for recovery rather than resuming recording automatically.
+
+Automation is bounded, not unattended surveillance: it never starts a capture by itself. The browser still requires an initial toolbar interaction and capture consent. The backend must be running to generate or deliver; a saved job resumes when it restarts, within the original 24-hour consent window. See [automation behavior and limits](docs/AUTOMATION.md).
 
 ## AI Dashboard and other systems
 
 AI Dashboard is the first destination adapter. By default Panther's backend connects to `http://127.0.0.1:7878`; the extension never writes directly to the dashboard. The dashboard must already be running and provide the supported MasterBoard API. Panther does not install, restart, or change dashboard services.
 
-Submitted tickets contain a bounded summary of intent, observed evidence, reproduction steps, acceptance criteria, source URL, timestamps, and provenance. Media references are not uploaded screenshot attachments. Sending a draft grants no permission to execute it: tickets remain in backlog with the `no-auto` review fence.
+Submitted tickets contain a bounded summary of intent, observed evidence, reproduction steps, acceptance criteria, source URL, timestamps, and provenance. Media references are not uploaded screenshot attachments. Automatically delivered tickets are **unreviewed proposals**, not verified bugs. Sending a draft grants no permission to execute it: tickets enter backlog with the `no-auto` review fence.
 
 ### Intent bundle
 
@@ -102,7 +105,9 @@ Screenshots require separate consent and may include any visible content in the 
 
 While recording, the browser persists capture state so the extension service worker can restart. If the backend is unavailable at Stop, Panther shows **Upload pending** and keeps the capture in browser storage. Use **Retry upload** after starting the backend; the same session identity prevents a second recording. **Discard unsaved capture** removes that browser copy. Generation failure has a separate retry because the recording may already be saved.
 
-Backend captures have a 30-day retention limit and a cap of 200 records, enforced when storage is accessed. **Delete capture** removes its local capture artifacts and saved drafts. It does not remove downloaded exports, browser consent history, already submitted dashboard tickets, or delivery receipts. Receipts retain capture identity, a content hash, target, ticket ID, and delivery state to prevent duplicate submissions; they do not retain the full captured evidence.
+Opted-in automated sessions also retry stopped uploads automatically, with a bounded retry budget and expiry. After the upload is admitted, a durable backend job owns generation and delivery, even if the popup closes. It freezes the destination, model mode, ticket limit, and draft payloads. Later edits cannot silently change an in-flight delivery. Status failures show unknown/stale information rather than success; verification timestamps describe the last confirmed delivery, not a continuous check of Dashboard state.
+
+Backend captures have a 30-day retention limit and a cap of 200 records, enforced when storage is accessed. **Delete capture** removes its local capture artifacts, saved drafts, and automation job. It stops remaining delivery, but cannot retract a request already in flight. It does not remove downloaded exports, browser consent history, already submitted dashboard tickets, or delivery receipts. Receipts retain capture identity, a content hash, target, ticket ID, and delivery state to prevent duplicate submissions; they do not retain the full captured evidence. Content-free cancellation markers prevent late uploads from reviving withdrawn delivery consent; their expiry is documented in the [automation contract](docs/AUTOMATION.md).
 
 The backend binds to `127.0.0.1`. Its origin and request-header checks are browser request protections, not user authentication. Treat this as a local single-user tool; do not expose the port publicly or use the header as an access token.
 
@@ -115,11 +120,11 @@ node --test tests/*.mjs
 python3 -B -m unittest discover -s tests -p 'test_*.py'
 ```
 
-The Python tests use temporary data directories and fake loopback dashboard/inference servers. The JavaScript tests exercise capture state and redaction with browser API doubles. Passing them does not establish that the unpacked extension has been installed and exercised in a real browser, that a particular local AI model works, or that a live AI Dashboard ticket has been accepted. Those are separate checks using a harmless, consented capture and explicit delivery confirmation.
+The Python tests use temporary data directories and fake loopback dashboard/inference servers. The JavaScript tests exercise capture state and redaction with browser API doubles. Passing them does not establish that the unpacked extension has been installed and exercised in a real browser, that a particular local AI model works, or that a live AI Dashboard ticket has been accepted. Those are separate checks using a harmless, consented capture and explicit manual or session-level delivery authorization.
 
 The optional test-only `jsonschema==4.26.0` dependency enables full export-schema validation; CI installs it explicitly. Without it, validator cases report skips. See [contributor verification instructions](CONTRIBUTING.md#unit-tests).
 
-See the [1.1.0 test results and pilot limits](docs/TEST_RESULTS.md) for the automated and real-browser evidence. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
+See the [1.2.0 verification results and pilot limits](docs/AUTOMATION_TEST_RESULTS.md) for automated, real-browser recovery, and bounded live-delivery evidence. The [1.1.0 report](docs/TEST_RESULTS.md) preserves earlier manual-workflow and local-model checks. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
 
 See [ROADMAP.md](ROADMAP.md) for remaining work, [CONTRIBUTING.md](CONTRIBUTING.md) for contributing, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

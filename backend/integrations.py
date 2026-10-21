@@ -1,7 +1,7 @@
 """Portable intent exports and an explicit, retry-safe local dashboard adapter.
 
-Submission is called only after the API's human confirmation gate. Captures and
-model proposals never grant execution authority. This module does not import
+Submission is called after either exact-ticket confirmation or an explicitly
+admitted per-capture delivery policy. Neither grants execution authority. This module does not import
 dashboard internals, inspect its database, or follow HTTP redirects.
 """
 
@@ -333,9 +333,11 @@ def _verify(target: str, item: int, payload: dict) -> None:
 
 
 def submit_ticket(recording: dict, ticket: dict) -> dict:
-    """Submit ONE explicitly reviewed draft, preserving uncertain delivery state.
+    """Submit ONE explicitly admitted draft, preserving uncertain delivery state.
 
-    The HTTP route owns confirmation. We serialize receipt and request handling
+    The HTTP route owns manual confirmation; the automation worker owns its
+    separately consented, bounded capture policy and frozen proposal checks.
+    We serialize receipt and request handling
     with storage's lock; atomic receipts precede writes so interruption retains
     the original identity. Retrying an unknown result reuses that same seed.
     """

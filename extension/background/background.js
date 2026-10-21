@@ -13,3 +13,4 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => { capture.tabRemoved(tabId).catch(console.error); });
 chrome.runtime.onStartup.addListener(() => { capture.browserStarted().catch(console.error); });
 chrome.runtime.onInstalled.addListener(() => { capture.browserStarted("extension_reloaded").catch(console.error); });
+chrome.alarms.onAlarm.addListener((alarm) => { capture.alarm(alarm.name).catch(console.error); });

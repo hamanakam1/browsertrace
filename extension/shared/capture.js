@@ -6,6 +6,11 @@ export const RESULT_KEY = "extension.capture.result";
 export const SETTINGS_KEY = "extension.local.state";
 export const BROWSER_KEY = "extension.capture.browserActive";
 export const MAX_EVENTS = 2000;
+export const AUTOMATION_ALARM = "panther.automation";
+const CONSENT_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_UPLOAD_ATTEMPTS = 4; // One user stop plus at most three automatic retries.
+const AUTOMATION_STATES = new Set(["queued", "generating", "delivering", "retry_wait", "delivered", "blocked", "cancelled"]);
+const TERMINAL_AUTOMATION_STATES = new Set(["delivered", "blocked", "cancelled"]);
 const MAX_SCREENSHOTS = 5;
 const MAX_SCREENSHOT_BYTES = 300000;
 const SCREENSHOT_COOLDOWN_MS = 3000;
@@ -14,6 +19,7 @@ const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "exten
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now) {
   let queue = Promise.resolve();
+  let pollQueued = false;
   const serial = (task) => {
     const result = queue.then(task);
     queue = result.catch(() => {});
@@ -48,7 +54,10 @@ export function createCaptureController(api, fetcher, now = Date.now) {
         sessionId: session.sessionId, tabId: session.tabId, startTime: session.startTime,
         eventCount: session.events.length, screenshotCount: session.screenshots.length,
         screenshotsConsent: session.screenshotConsent === true,
-        error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url
+        error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url,
+        automation: session.automation || null, automationWithdrawn: session.automationWithdrawn === true,
+        uploadAttempts: session.uploadAttempts || 0, nextUploadRetryAt: session.nextUploadRetryAt || null,
+        cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
       result
     };
@@ -66,9 +75,190 @@ export function createCaptureController(api, fetcher, now = Date.now) {
   const validPage = (session, sender) => !!session && sender?.id === api.runtime.id &&
     sender.tab?.id === session.tabId && sender.frameId === 0 && origin(sender.url) === session.origin;
 
+  function automationFinished(result) {
+    return !result.cancelRequested && !result.error && TERMINAL_AUTOMATION_STATES.has(result.automation?.status);
+  }
+
+  async function automationTarget() {
+    const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/integrations/ai-dashboard`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Dashboard configuration returned HTTP ${response.status}.`);
+    const body = await response.json();
+    // Reachability may be false while the configured canonical destination is known.
+    const url = new URL(body.url);
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/" ||
+        !(/^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/.test(url.hostname))) throw new Error("A known loopback dashboard destination is required.");
+    return { ok: true, url: body.url };
+  }
+
+  async function ensureAlarm() {
+    if (!api.alarms) return;
+    const session = await read(SESSION_KEY);
+    const result = await read(RESULT_KEY);
+    const needed = !!(session?.nextUploadRetryAt || (session?.cancelRequested && (session.cancelAttempts || 0) < MAX_UPLOAD_ATTEMPTS && now() < session.startTime + CONSENT_TTL_MS) ||
+      (result?.automationPolicy && !automationFinished(result) && !result.pollExpired));
+    if (needed) {
+      if (!await api.alarms.get(AUTOMATION_ALARM)) await api.alarms.create(AUTOMATION_ALARM, { periodInMinutes: 1 });
+    } else await api.alarms.clear(AUTOMATION_ALARM);
+  }
+
+  function acceptAutomation(body, result) {
+    if (body?.ok !== true || body.recording_id !== result.id || !AUTOMATION_STATES.has(body.status) ||
+        body.target_url !== result.automationPolicy.target_url || body.use_ai !== result.automationPolicy.use_ai ||
+        body.max_tickets !== result.automationPolicy.max_tickets ||
+        body.execution_authorized !== false || body.expires_at !== result.consentExpiresAt / 1000 ||
+        !Number.isInteger(body.ticket_count) || !Number.isInteger(body.delivered_count) ||
+        body.ticket_count < 0 || body.ticket_count > 20 ||
+        (body.ticket_count > 5 && !(body.status === "blocked" && body.delivered_count === 0 && body.deliveries?.length === 0)) ||
+        body.delivered_count < 0 || body.delivered_count > 5 || body.delivered_count > body.ticket_count ||
+        !Array.isArray(body.deliveries) || body.deliveries.length > 5 ||
+        body.deliveries.filter((item) => item?.state === "delivered" && item.verified === true).length !== body.delivered_count) throw new Error("Backend returned an unverified delivery status; check the recording before retrying.");
+    // The backend returns content-free delivery receipts. Retain links and partial
+    // receipts even when a later status is blocked or cancelled.
+    result.automation = body;
+    result.ticketCount = body.ticket_count;
+    result.automationCheckedAt = now();
+    result.error = "";
+    if (TERMINAL_AUTOMATION_STATES.has(body.status)) result.cancelRequested = false;
+  }
+
+  async function refreshAutomation(result, action = null) {
+    result.status = "automation";
+    result.lastPollAt = now();
+    if (action === "cancel") result.cancelRequested = true;
+    await saveResult(result);
+    try {
+      const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/automation/${encodeURIComponent(result.id)}`, {
+        ...(action ? { method: "POST", headers: HEADERS, body: JSON.stringify({ action }) } : {}), signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) throw new Error(`Delivery status returned HTTP ${response.status}.`);
+      acceptAutomation(await response.json(), result);
+      if (result.cancelRequested && !TERMINAL_AUTOMATION_STATES.has(result.automation.status)) {
+        result.error = "Cancellation is pending. Already delivered or in-flight tickets cannot be undone.";
+      }
+    } catch (error) {
+      result.error = `${error.message} Delivery status is unknown; no new generation was requested.${result.cancelRequested ? " Cancellation is not yet confirmed; already delivered or in-flight tickets cannot be undone." : ""}`;
+    }
+    await saveResult(result);
+    await ensureAlarm();
+    return status();
+  }
+
+  async function savedResult(session, id, automation = null) {
+    const automated = !!session.automation && !session.automationWithdrawn;
+    const result = { id, status: automated ? "automation" : "generating", tabId: session.tabId, origin: session.origin,
+      eventCount: session.events.length, screenshotCount: session.screenshots.length, ticketCount: 0, error: "", warning: session.warning || "" };
+    if (automated) {
+      result.automationPolicy = structuredClone(session.automation);
+      result.consentExpiresAt = session.startTime + CONSENT_TTL_MS;
+      result.cancelRequested = session.cancelRequested === true;
+      if (automation) acceptAutomation(automation, result);
+    }
+    await saveResult(result);
+    await api.storage.local.remove(SESSION_KEY);
+    try { await api.action.setBadgeText({ tabId: session.tabId, text: "" }); } catch {}
+    await audit("saved", { tabId: session.tabId, eventCount: session.events.length });
+    await ensureAlarm();
+    return result;
+  }
+
+  async function cancelAutomation() {
+    const session = await read(SESSION_KEY);
+    if (session?.automation && !session.automationWithdrawn) {
+      session.nextUploadRetryAt = null;
+      if (!session.uploadAttempts) {
+        session.automationWithdrawn = true;
+        session.warning = `${session.warning ? `${session.warning} ` : ""}Automatic delivery withdrawn. Stop will save reviewable drafts only.`;
+        await save(session);
+        await audit("automatic_delivery_withdrawn");
+        await ensureAlarm();
+        return status();
+      }
+      // An upload with a lost response may already own a running backend job.
+      // Never replay its identity with altered consent or claim local discard
+      // cancels that job. Reconcile the precomputed stable recording identity.
+      session.cancelRequested = true;
+      session.lastCancelAt = now();
+      session.cancelAttempts = (session.cancelAttempts || 0) + 1;
+      await save(session);
+      try {
+        const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/automation/${session.recordingId}`, {
+          method: "POST", headers: HEADERS, body: JSON.stringify({ action: "cancel" }), signal: AbortSignal.timeout(10000)
+        });
+        if (!response.ok) throw new Error(`Cancellation returned HTTP ${response.status}.`);
+        const body = await response.json();
+        if (body?.ok === true && body.recording_id === session.recordingId && body.status === "cancelled" && body.upload_cancelled === true && body.execution_authorized === false && body.delivered_count === 0) {
+          session.automationWithdrawn = true;
+          session.cancellationConfirmed = true;
+          session.cancelRequested = false;
+          session.error = "Automatic delivery was cancelled before the backend accepted this capture. Its local events remain here; discard this copy before starting a new capture. No retry will revive this cancelled identity.";
+          await save(session);
+          await ensureAlarm();
+          return status();
+        }
+        const result = await savedResult(session, session.recordingId, body);
+        if (!TERMINAL_AUTOMATION_STATES.has(result.automation.status)) result.error = "Cancellation is not yet confirmed; already delivered or in-flight tickets cannot be undone.";
+        await saveResult(result);
+      } catch (error) {
+        session.error = `${error.message} Automatic upload retries are stopped. A previous upload may have been accepted; cancellation is unconfirmed. Check again before discarding.`;
+        await save(session);
+      }
+      await ensureAlarm();
+      return status();
+    }
+    const result = await read(RESULT_KEY);
+    if (!result?.automationPolicy) throw new Error("There is no automatic delivery to cancel.");
+    return refreshAutomation(result, "cancel");
+  }
+
+  async function reconcileUpload(session) {
+    try {
+      const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/automation/${session.recordingId}`, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error(`Upload status returned HTTP ${response.status}.`);
+      const body = await response.json();
+      if (body?.ok === true && body.recording_id === session.recordingId && body.status === "cancelled" && body.upload_cancelled === true && body.execution_authorized === false && body.delivered_count === 0) {
+        session.automationWithdrawn = true;
+        session.cancellationConfirmed = true;
+        session.cancelRequested = false;
+        session.nextUploadRetryAt = null;
+        session.error = "The backend confirmed this upload identity was cancelled. Its local events remain here; discard this copy before starting a new capture.";
+        await save(session);
+      } else {
+        const result = await savedResult(session, session.recordingId, body);
+        if (result.cancelRequested) {
+          result.error = "The upload was accepted, but cancellation is not yet confirmed. Already delivered or in-flight tickets cannot be undone.";
+          await saveResult(result);
+        }
+      }
+    } catch (error) {
+      session.error = `${error.message} Upload acceptance is still unknown. The local capture is retained; checking status never resends it.`;
+      await save(session);
+    }
+    await ensureAlarm();
+    return status();
+  }
+
+  async function automationTick() {
+    const session = await read(SESSION_KEY);
+    if (session?.cancelRequested) {
+      if ((session.cancelAttempts || 0) < MAX_UPLOAD_ATTEMPTS && now() < session.startTime + CONSENT_TTL_MS && now() - session.lastCancelAt >= 60000) await cancelAutomation();
+    } else if (session?.status === "pending" && session.nextUploadRetryAt && now() >= session.nextUploadRetryAt) {
+      await upload(session, true);
+    }
+    const result = await read(RESULT_KEY);
+    if (result?.automationPolicy && !result.pollExpired && !automationFinished(result) && now() - (result.lastPollAt || 0) >= 5000) {
+      if (now() >= result.consentExpiresAt) {
+        result.pollExpired = true;
+        result.error = "The 24-hour delivery consent window ended. Open review to check the backend's final status; no automatic upload or retry will run.";
+        await saveResult(result);
+      } else await refreshAutomation(result, result.cancelRequested ? "cancel" : null);
+    }
+    await ensureAlarm();
+  }
+
   async function inject(session) {
     await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
-    const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId });
+    const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId,
+      automationEnabled: !!session.automation && !session.automationWithdrawn });
     if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
   }
 
@@ -77,23 +267,36 @@ export function createCaptureController(api, fetcher, now = Date.now) {
     const settings = await read(SETTINGS_KEY) || {};
     if (settings.enabled !== true || message.consent !== true) throw new Error("Enable capture consent before starting.");
     if (await read(SESSION_KEY)) throw new Error("Finish or discard the existing capture before starting another.");
+    const previous = await read(RESULT_KEY);
+    if (previous?.automationPolicy && !automationFinished(previous)) throw new Error("Finish or cancel the current delivery before starting another capture.");
     const [tab] = await api.tabs.query({ active: true, currentWindow: true });
     if (!tab || tab.id !== message.tabId) throw new Error("Choose the currently active tab to capture.");
     if (!/^https?:\/\//i.test(tab.url || "")) throw new Error("Choose an ordinary http or https webpage. Browser settings and extension pages cannot be captured.");
     if (message.audio || message.video) throw new Error("Video and tab audio are not supported in this release.");
+    let automation = null;
+    if (message.automation?.enabled === true) {
+      if (message.automation.consent !== true || typeof message.automation.use_ai !== "boolean" || message.automation.max_tickets !== 5) {
+        throw new Error("Automatic delivery requires fresh consent, a model choice, and the five-ticket limit.");
+      }
+      const target = await automationTarget();
+      if (message.automation.target_url !== target.url) throw new Error("The dashboard destination changed or is unknown. Refresh the popup and consent to the displayed destination again.");
+      automation = { enabled: true, consent: true, target_url: target.url, use_ai: message.automation.use_ai, max_tickets: 5 };
+    }
     const session = {
       sessionId: crypto.randomUUID(), status: "recording", consent: true,
       tabId: tab.id, windowId: tab.windowId, origin: origin(tab.url),
       startTime: now(), url: sanitizeUrl(tab.url), title: sanitizeText(tab.title || "", 200),
       goal: sanitizeText(message.goal || "", 1000), extensionId: api.runtime.id,
-      screenshotConsent: message.screenshots === true, events: [], screenshots: [], lastScreenshotTs: 0, warning: ""
+      screenshotConsent: message.screenshots === true, events: [], screenshots: [], lastScreenshotTs: 0, warning: "",
+      automation, uploadAttempts: 0, nextUploadRetryAt: null, automationWithdrawn: false
     };
+    if (automation) session.recordingId = await recordingId(session.extensionId, session.sessionId);
     await save(session);
     try { await inject(session); }
     catch (error) { await api.storage.local.remove(SESSION_KEY); throw error; }
     await api.storage.local.remove(RESULT_KEY);
     await badge(session);
-    await audit("start", { tabId: session.tabId, screenshots: session.screenshotConsent });
+    await audit("start", { tabId: session.tabId, screenshots: session.screenshotConsent, automaticDelivery: !!automation, localAI: automation?.use_ai === true });
     return status();
   }
 
@@ -136,6 +339,7 @@ export function createCaptureController(api, fetcher, now = Date.now) {
   }
 
   async function generate(result) {
+    if (result.automationPolicy) throw new Error("Automatic delivery owns draft generation for this recording. Check its existing job instead.");
     result.status = "generating";
     result.error = "";
     await saveResult(result);
@@ -157,9 +361,23 @@ export function createCaptureController(api, fetcher, now = Date.now) {
     return status();
   }
 
-  async function upload(session) {
+  async function upload(session, automaticRetry = false) {
+    const automated = !!session.automation && !session.automationWithdrawn;
+    if (session.cancelRequested) throw new Error("Cancellation is unconfirmed. Check cancellation before attempting another upload.");
+    if (session.cancellationConfirmed) throw new Error("This upload identity was cancelled. Discard the local copy before starting a new capture.");
+    if (automated && (now() >= session.startTime + CONSENT_TTL_MS || (session.uploadAttempts || 0) >= MAX_UPLOAD_ATTEMPTS)) {
+      session.status = "pending";
+      session.nextUploadRetryAt = null;
+      session.error = "Automatic delivery upload stopped: its 24-hour consent window or three-retry limit was reached. Check cancellation or review the saved job; consent is not renewed by retry.";
+      await save(session);
+      await ensureAlarm();
+      return { ...(await status()), ok: false, error: session.error };
+    }
+    if (automaticRetry && (!automated || !session.uploadAttempts)) return status();
     session.status = "saving";
     session.error = "";
+    session.nextUploadRetryAt = null;
+    session.uploadAttempts = (session.uploadAttempts || 0) + 1;
     await save(session);
     await badge(session);
     const payload = {
@@ -168,6 +386,7 @@ export function createCaptureController(api, fetcher, now = Date.now) {
       extensionId: session.extensionId, url: session.url, title: session.title, goal: session.goal,
       consent: session.consent, screenshotsConsent: session.screenshotConsent, stopReason: session.stopReason
     };
+    if (automated) payload.automation = session.automation;
     let receipt;
     try {
       const response = await fetcher(`${BACKEND_ORIGIN}/api/extension/record`, {
@@ -176,22 +395,24 @@ export function createCaptureController(api, fetcher, now = Date.now) {
       if (!response.ok) throw new Error(`Backend returned HTTP ${response.status}.`);
       receipt = await response.json();
       if (!receipt.id) throw new Error("Backend did not return a recording receipt.");
+      if (automated && receipt.id !== session.recordingId) throw new Error("Backend returned a mismatched recording identity.");
     } catch (error) {
       session.status = "pending";
       session.error = `${error.message} Capture is saved in this browser; retry when the backend is available.`;
+      if (automated && session.uploadAttempts < MAX_UPLOAD_ATTEMPTS && now() < session.startTime + CONSENT_TTL_MS) {
+        session.nextUploadRetryAt = now() + 60000 * 2 ** (session.uploadAttempts - 1);
+        session.error += " Automatic upload retry is scheduled; the destination and consent are unchanged.";
+      }
       await save(session);
       await badge(session);
+      await ensureAlarm();
       return { ...(await status()), ok: false, error: session.error };
     }
     // Save the receipt before dropping the upload copy. Retries use sessionId
     // idempotency if termination occurs between either durable write.
-    const result = { id: receipt.id, status: "generating", tabId: session.tabId, origin: session.origin,
-      eventCount: session.events.length, screenshotCount: session.screenshots.length, ticketCount: 0, error: "", warning: session.warning || "" };
-    await saveResult(result);
-    await api.storage.local.remove(SESSION_KEY);
-    try { await api.action.setBadgeText({ tabId: session.tabId, text: "" }); } catch {}
-    await audit("saved", { tabId: session.tabId, eventCount: session.events.length });
-    return generate(result);
+    const result = await savedResult(session, receipt.id);
+    // Only the backend job generates and delivers for an automated session.
+    return automated ? refreshAutomation(result) : generate(result);
   }
 
   async function stop(reason = "user") {
@@ -204,6 +425,13 @@ export function createCaptureController(api, fetcher, now = Date.now) {
       await save(session);
       await tabMessage(session.tabId, { type: "extension.captureStop", sessionId: session.sessionId });
       await audit("stop", { tabId: session.tabId, reason });
+    }
+    if (session.automation && !session.automationWithdrawn && reason !== "user") {
+      session.error = "Capture stopped automatically. Use Stop & deliver / Retry upload to explicitly send it, or withdraw automatic delivery.";
+      session.nextUploadRetryAt = null;
+      await save(session);
+      await badge(session);
+      return status();
     }
     return upload(session);
   }
@@ -228,9 +456,24 @@ export function createCaptureController(api, fetcher, now = Date.now) {
     if (!trustedControl(sender)) return { ok: false, error: "Capture controls are only available in the extension." };
     switch (message.type) {
       case "extension.getStatus": return status();
+      case "extension.getAutomationTarget": return automationTarget();
       case "extension.startRecording": return start(message);
       case "extension.stopRecording": return stop();
       case "extension.openReview": return openReview();
+      case "extension.refreshAutomation": {
+        const session = await read(SESSION_KEY);
+        if (session?.automation && session.uploadAttempts && !session.automationWithdrawn) return reconcileUpload(session);
+        const result = await read(RESULT_KEY);
+        if (!result?.automationPolicy) throw new Error("There is no saved automatic delivery to check.");
+        return refreshAutomation(result);
+      }
+      case "extension.retryAutomation": {
+        const result = await read(RESULT_KEY);
+        if (!result?.automationPolicy || result.automation?.status !== "retry_wait" || result.cancelRequested) throw new Error("Only a retry-wait delivery can be retried; blocked or cancelled jobs cannot be restarted here.");
+        if (now() >= result.consentExpiresAt) throw new Error("The original delivery consent expired; retry cannot renew it.");
+        return refreshAutomation(result, "retry");
+      }
+      case "extension.cancelAutomation": return cancelAutomation();
       case "extension.retryGeneration": {
         const result = await read(RESULT_KEY);
         if (!result) throw new Error("There is no saved recording to generate drafts from.");
@@ -244,6 +487,7 @@ export function createCaptureController(api, fetcher, now = Date.now) {
       case "extension.discardCapture": {
         const session = await read(SESSION_KEY);
         if (session?.status === "recording") throw new Error("Stop capture before discarding it.");
+        if (session?.automation && session.uploadAttempts && !session.automationWithdrawn) throw new Error("An automatic upload may have been accepted. Confirm cancellation before discarding its local copy.");
         await api.storage.local.remove(SESSION_KEY);
         if (session) {
           try { await api.action.setBadgeText({ tabId: session.tabId, text: "" }); } catch {}
@@ -255,7 +499,12 @@ export function createCaptureController(api, fetcher, now = Date.now) {
         const settings = await read(SETTINGS_KEY) || {};
         await api.storage.local.set({ [SETTINGS_KEY]: { ...settings, enabled: message.enabled === true } });
         await audit(message.enabled === true ? "consent_enabled" : "consent_disabled");
-        if (message.enabled !== true && (await read(SESSION_KEY))?.status === "recording") return stop("consent_revoked");
+        if (message.enabled !== true) {
+          const session = await read(SESSION_KEY);
+          const result = await read(RESULT_KEY);
+          if ((session?.automation && !session.automationWithdrawn) || (result?.automationPolicy && !automationFinished(result))) await cancelAutomation();
+          if ((await read(SESSION_KEY))?.status === "recording") return stop("consent_revoked");
+        }
         return status();
       }
       default: return { ok: false, error: "Unknown capture command." };
@@ -282,6 +531,9 @@ export function createCaptureController(api, fetcher, now = Date.now) {
     if (session?.status === "saving") {
       session.status = "pending";
       session.error = "Upload was interrupted. Retry to confirm the saved recording.";
+      if (session.automation && !session.automationWithdrawn && !session.cancelRequested && session.uploadAttempts < MAX_UPLOAD_ATTEMPTS) {
+        session.nextUploadRetryAt = now() + 60000;
+      }
       await save(session);
     }
     const result = await read(RESULT_KEY);
@@ -290,13 +542,23 @@ export function createCaptureController(api, fetcher, now = Date.now) {
       result.error = "Draft generation was interrupted. Retry generation; your recording is saved.";
       await saveResult(result);
     }
+    await ensureAlarm();
   })();
   queue = recovery.catch(() => {});
 
   return {
     message: (message, sender) => {
       // Status polls must remain responsive while upload/generation is running.
-      if (message.type === "extension.getStatus" || message.type === "page.getStatus") return recovery.then(() => handle(message, sender));
+      if (message.type === "extension.getStatus" || message.type === "page.getStatus") return recovery.then(async () => {
+        const response = await handle(message, sender);
+        // UI polling can improve freshness, but never owns job lifetime. Alarms
+        // are the durable wakeup path when the popup and page panel are closed.
+        if (response.ok && !pollQueued) {
+          pollQueued = true;
+          serial(automationTick).catch(() => {}).finally(() => { pollQueued = false; });
+        }
+        return response;
+      });
       return serial(() => handle(message, sender));
     },
     tabUpdated: (tabId, change, tab) => serial(async () => {
@@ -321,10 +583,18 @@ export function createCaptureController(api, fetcher, now = Date.now) {
         session.error = "Browser or extension restarted. Your captured events are saved; retry to upload them.";
         await save(session);
       }
-    })
+      await ensureAlarm();
+    }),
+    alarm: (name) => name === AUTOMATION_ALARM ? serial(automationTick) : Promise.resolve()
   };
 }
 
 function origin(url) {
   try { return new URL(url).origin; } catch { return ""; }
+}
+
+async function recordingId(extensionId, sessionId) {
+  const bytes = new TextEncoder().encode(JSON.stringify([extensionId, sessionId]));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }

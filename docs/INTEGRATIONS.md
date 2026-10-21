@@ -103,7 +103,7 @@ The outbound ticket has:
 
 The adapter respects the dashboard's 200-character title and 4000-character detail limits. The preview shows the bounded payload and warns that the full draft remains in the neutral export. It does not upload screenshots or set the dashboard's separate readiness record to `NEEDS_REVIEW`.
 
-Submission requires a review confirmation tied to the current preview hash, including its destination URL, exact outbound payload, and full reviewed draft. Changing the destination or payload requires a new preview. The backend verifies the returned item number, capture identity, source, content, backlog status, and review tags before first reporting `delivered`. HTTP 200 or `ok: true` alone is insufficient: the dashboard can return a null item when intake is paused or capped.
+Manual submission requires a review confirmation tied to the current preview hash, including its destination URL, exact outbound payload, and full reviewed draft. Changing the destination or payload requires a new preview. Separately opted-in [automatic sessions](AUTOMATION.md) instead freeze a bounded delivery policy in the extension at capture Start. The backend admits that original policy on upload and freezes generated proposals before sending; it does **not** claim a human reviewed those proposals. Both paths use the same adapter and delivery identity. The backend verifies the returned item number, capture identity, source, content, backlog status, and review tags before first reporting `delivered`. HTTP 200 or `ok: true` alone is insufficient: the dashboard can return a null item when intake is paused or capped.
 
 ### Delivery outcomes and retry behavior
 
@@ -137,6 +137,8 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 | `GET /tickets/<id>` | Read the saved draft bundle. |
 | `POST /tickets/<id>/review` | Save allowed draft edits. |
 | `GET /export/<id>` | Export the portable JSON bundle. |
+| `GET /automation/<id>` | Inspect automatic job status, stage, counts, retry timing, and delivery receipts; manual captures return `disabled`. |
+| `POST /automation/<id>` | `{ "action": "cancel" }` stops remaining delivery; `{ "action": "retry" }` advances an eligible retry without resetting its budget or expiry. |
 | `GET /integrations/ai-dashboard` | Check dashboard health-route reachability. |
 | `POST /integrations/ai-dashboard/preview/<id>` | Build the exact dashboard payload without contacting it. |
 | `POST /integrations/ai-dashboard/submit/<id>` | Submit one confirmed, previewed draft and verify it. |
@@ -156,7 +158,7 @@ Review and preview bodies use:
 }
 ```
 
-Submit repeats the reviewed body and adds `"confirmed": true` plus the exact `"payload_hash"` returned by preview. Changing the content invalidates that preview. The shipped UI handles this sequence; custom clients must preserve the same explicit review gate.
+Manual submit repeats the reviewed body and adds `"confirmed": true` plus the exact `"payload_hash"` returned by preview. Changing the content invalidates that preview. The shipped UI handles this sequence; custom clients must preserve the same explicit review gate, or use the separately consented automatic-session contract. Automation must never be inferred from capture consent alone.
 
 ## Building another adapter
 

@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import storage
+import automation
 from api import routes
 from server import Handler
 from tickets import DraftGenerationError
@@ -27,6 +28,7 @@ class QuietHandler(Handler):
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
+        automation._CANCELLED.clear()
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.patches = [patch.object(storage, key, value) for key, value in {
@@ -53,6 +55,7 @@ class HttpTests(unittest.TestCase):
         for item in reversed(self.patches):
             item.stop()
         self.temp.cleanup()
+        automation._CANCELLED.clear()
 
     def request(self, path, body=None, method=None, headers=None):
         req = urllib.request.Request(self.origin + path,
@@ -146,6 +149,9 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertNotIn(b"onclick=", html)
+        code, script, _ = self.request("/ui/options/automation-state.js")
+        self.assertEqual(code, 200)
+        self.assertIn(b"export", script)
         code, _, _ = self.request("/ui/../../backend/server.py")
         self.assertEqual(code, 404)
 

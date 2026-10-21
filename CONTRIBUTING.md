@@ -16,6 +16,7 @@ Thank you for considering a contribution! panther-intent-capture is an open-sour
 - Confirm the visible badge appears while recording
 - Confirm typed values and keys are absent from stored events and screenshot capture requires separate consent
 - Verify the floating controls, automatic evidence drafts, offline upload retry, and visible generation failures
+- Verify automatic delivery defaults off, locks its target/mode at Start, shows stages/counts, and stops remaining work on cancellation. Test expiry, duplicate uploads, worker/browser/backend restart, and a lost POST response against a fake destination.
 
 ### Backend
 ```bash
@@ -54,7 +55,7 @@ Any feature that captures or stores user data must:
 - Show a visible indicator while active
 - Allow user deletion
 
-Use temporary `PANTHER_DATA_DIR` storage and synthetic dashboard endpoints for automated tests. Never create live dashboard tickets as a smoke test. Report unit tests, loaded-browser checks, local model checks, and confirmed live ticket delivery separately. CI runs JavaScript, Python, and JSON Schema regressions, then retains an unpackable Chromium extension ZIP. If `jsonschema` is unavailable locally, seven validator tests explicitly skip; the remaining structural tests are not equivalent validation.
+Use temporary `PANTHER_DATA_DIR` storage and synthetic dashboard endpoints for automated tests. Never create live dashboard tickets without explicit operator approval for a bounded pilot. Report unit tests, loaded-browser checks, local model checks, and confirmed live ticket delivery separately. CI runs JavaScript, Python, and JSON Schema regressions, then retains an unpackable Chromium extension ZIP. If `jsonschema` is unavailable locally, seven validator tests explicitly skip; the remaining structural tests are not equivalent validation.
 
 ## Questions
 

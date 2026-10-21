@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.1.x   | Yes       |
-| 1.0.x   | Upgrade to 1.1.x |
+| 1.2.x   | Yes       |
+| 1.0.x–1.1.x | Upgrade to 1.2.x |
 
 ## Reporting a Vulnerability
 
@@ -28,10 +28,11 @@ panther-intent-capture is designed around these security boundaries:
 * **Local-first** — recordings and inference stay on the operator's machine
 * **Visible indicator** — a persistent badge shows while recording
 * **User deletion** — recordings carry a TTL and can be deleted at any time
-* **Execution boundaries** — drafts require review; confirmed dashboard delivery preserves backlog and no-auto controls
+* **Separate delivery consent** — automatic delivery needs its own per-session opt-in, pinned destination, ticket cap, expiry, and bounded retries; manual delivery needs exact preview confirmation
+* **Execution boundaries** — delivered proposals still require review; both manual and automatic delivery preserve backlog and no-auto controls. Panther does not implement the work
 * **Local trust boundary** — the backend binds to loopback with origin/Host/header checks, but has no user authentication. Do not expose it publicly. Other local processes and installed extensions with appropriate access are inside this single-user trust boundary.
 
-Deletion removes local capture artifacts and drafts, but not exports, browser consent history, remote tickets, or content-free delivery receipts needed for deduplication. Never include real recordings or screenshots in public bug reports without inspecting them for private data.
+Deletion removes local capture artifacts, drafts, and automation jobs, but cannot undo an in-flight destination write. It does not remove exports, browser consent history, remote tickets, or content-free delivery receipts needed for deduplication. Never include real recordings or screenshots in public bug reports without inspecting them for private data.
 
 ## Disclosure
 

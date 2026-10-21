@@ -1,6 +1,7 @@
 """Private, atomic file storage for Panther captures and derived artifacts."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -88,6 +89,7 @@ def create_recording(
     screenshots_path: Optional[Path] = None, video_size: int = 0,
     recording_id: Optional[str] = None, session_id: str = "", url: str = "",
     title: str = "", goal: str = "", metadata: Optional[Dict[str, Any]] = None,
+    automation_policy: Optional[Dict[str, Any]] = None,
 ) -> str:
     if not all(math.isfinite(value) for value in (start_time, end_time)) or end_time < start_time:
         raise ValueError("Invalid recording times")
@@ -123,6 +125,8 @@ def create_recording(
         if metadata:
             manifest[recording_id]["consent"] = metadata.get("consent") is True
             manifest[recording_id]["screenshots_consent"] = metadata.get("screenshots_consent") is True
+        if automation_policy is not None:
+            manifest[recording_id]["automation"] = copy.deepcopy(automation_policy)
         _enforce_ttl_and_cap(manifest)
         _save_manifest(manifest)
         return recording_id
@@ -135,6 +139,19 @@ def get_recording(recording_id: str) -> Optional[Dict[str, Any]]:
         manifest = _load_manifest()
         _enforce_ttl_and_cap(manifest)
         return manifest.get(recording_id)
+
+
+def mark_automation_started(recording_id: str) -> None:
+    """A lost job after work began must never reset its budget or proposals."""
+    with DATA_LOCK:
+        manifest = _load_manifest()
+        _enforce_ttl_and_cap(manifest)
+        entry = manifest.get(_safe_id(recording_id))
+        if not entry or not entry.get("automation"):
+            raise ValueError("Admitted recording not found")
+        if not entry.get("automation_started"):
+            entry["automation_started"] = True
+            _save_manifest(manifest)
 
 
 def list_recordings() -> List[Dict[str, Any]]:
@@ -158,6 +175,7 @@ def _delete_artifacts(recording_id: str, entry: Dict[str, Any]) -> None:
     candidates = [entry.get(key) for key in ("video_path", "events_path", "screenshots_path")]
     candidates += [(entry.get("inference") or {}).get("result_path")]
     candidates += [ROOT / "tickets" / f"{recording_id}.json"]
+    candidates += [ROOT / "automation" / f"{recording_id}.json"]
     # Older versions used random filenames. Remove superseded results as well.
     for directory in (ROOT / "tickets", INFERENCE_DIR):
         if directory.is_dir():

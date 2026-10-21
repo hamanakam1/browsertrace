@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createCaptureController, SESSION_KEY, RESULT_KEY, SETTINGS_KEY, BROWSER_KEY, MAX_EVENTS } from "../extension/shared/capture.js";
+import { createCaptureController, SESSION_KEY, RESULT_KEY, SETTINGS_KEY, BROWSER_KEY, MAX_EVENTS, AUTOMATION_ALARM } from "../extension/shared/capture.js";
 import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "../extension/shared/redaction.js";
 
 const control = { id: "test-extension", url: "chrome-extension://test-extension/popup/popup.html" };
@@ -11,10 +11,12 @@ const clone = (value) => value === undefined ? undefined : structuredClone(value
 function fixture(options = {}) {
   const data = { [SETTINGS_KEY]: { enabled: true }, ...clone(options.data || {}) };
   const sessionData = {};
+  const alarms = new Map();
   const calls = { inject: [], messages: [], captures: [], fetch: [], badges: [], tabs: [] };
   const activeTab = { id: 7, windowId: 42, url: "https://app.test/dashboard?token=private#work-board", title: "Dashboard" };
   let timestamp = 1700000000000;
   const api = {
+    alarms: { get: async (name) => alarms.get(name), create: async (name, value) => alarms.set(name, clone(value)), clear: async (name) => alarms.delete(name) },
     runtime: { id: control.id, getURL: (path) => `chrome-extension://${control.id}/${path}`, getManifest: () => ({ name: "Panther" }) },
     storage: { session: {
       get: async (key) => ({ [key]: clone(sessionData[key]) }),
@@ -38,7 +40,7 @@ function fixture(options = {}) {
   const makeController = () => createCaptureController(api, fetcher, () => timestamp++);
   let controller = makeController();
   return {
-    api, data, sessionData, calls, activeTab,
+    api, data, sessionData, calls, activeTab, alarms,
     get controller() { return controller; },
     restartWorker() { controller = makeController(); return controller; },
     setFetch(fn) { fetchBehavior = fn; },
@@ -52,7 +54,8 @@ function fixture(options = {}) {
 test("all manifests are valid and Chromium permissions are scoped to an invoked tab", async () => {
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
-    assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting"]);
+    assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms"]);
+    assert.equal(manifest.version, "1.2.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -339,4 +342,253 @@ test("discard requires a stopped session and deletes only its local capture", as
   await f.send("extension.discardCapture");
   assert.equal(f.data[SESSION_KEY], undefined);
   assert.equal(f.data[SETTINGS_KEY].enabled, true);
+});
+
+const automaticPolicy = { enabled: true, consent: true, target_url: "http://127.0.0.1:7878", use_ai: false, max_tickets: 5 };
+
+function automaticFixture() {
+  const transport = { failUpload: false, failStatus: false, target: automaticPolicy.target_url, state: "queued", count: 0, delivered: 0, tombstone: false };
+  let policy, savedId, expiresAt;
+  const f = fixture({ fetch: async (url, init = {}) => {
+    if (url.endsWith("/integrations/ai-dashboard")) return { ok: true, json: async () => ({ ok: false, url: transport.target }) };
+    if (url.endsWith("/record")) {
+      const payload = JSON.parse(init.body);
+      savedId = f.data[SESSION_KEY].recordingId;
+      policy = payload.automation;
+      expiresAt = (payload.startTime + 86400000) / 1000;
+      if (transport.failUpload) throw new Error("offline upload");
+      return { ok: true, json: async () => ({ id: savedId || "manual-record" }) };
+    }
+    if (url.includes("/automation/")) {
+      if (transport.failStatus) throw new Error("offline status");
+      const action = init.body ? JSON.parse(init.body).action : null;
+      const id = url.split("/").at(-1);
+      if (transport.tombstone && action === "cancel") return { ok: true, json: async () => ({ ok: true, recording_id: id, status: "cancelled", upload_cancelled: true, delivered_count: 0, execution_authorized: false }) };
+      if (action === "cancel") transport.state = "cancelled";
+      if (action === "retry") transport.state = "queued";
+      return { ok: true, json: async () => ({ ok: true, recording_id: id, status: transport.state, stage: "generation", ticket_count: transport.count,
+        delivered_count: transport.delivered, attempts: 1, next_retry_at: null, error: transport.state === "blocked" ? "Safety check blocked delivery" : "",
+        deliveries: transport.delivered ? [{ ticket_id: "draft-1", state: "delivered", verified: true, ticket_url: "http://127.0.0.1:7878/?ticket=fixture" }] : [],
+        target_url: policy.target_url, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
+    }
+    return { ok: true, json: async () => ({ tickets: [] }) };
+  } });
+  f.transport = transport;
+  f.startAutomatic = (overrides = {}) => f.start({ automation: { ...automaticPolicy, ...overrides } });
+  return f;
+}
+
+test("automatic delivery requires separate consent and exact known destination and freezes its policy", async () => {
+  const f = automaticFixture();
+  await assert.rejects(f.startAutomatic({ consent: false }), /fresh consent/);
+  await assert.rejects(f.startAutomatic({ max_tickets: 6 }), /five-ticket/);
+  await assert.rejects(f.startAutomatic({ target_url: "http://127.0.0.1:9999" }), /destination changed/);
+  const policy = { ...automaticPolicy, use_ai: true };
+  await f.start({ automation: policy });
+  policy.target_url = "http://127.0.0.1:9999";
+  policy.use_ai = false;
+  assert.deepEqual(f.data[SESSION_KEY].automation, { ...automaticPolicy, use_ai: true });
+  assert.match(f.data[SESSION_KEY].recordingId, /^[a-f0-9]{32}$/);
+  assert.equal(f.calls.messages[0][1].automationEnabled, true);
+});
+
+test("automated save has one generation owner and retains screenshot warnings and immutable policy", async () => {
+  const f = automaticFixture();
+  await f.startAutomatic();
+  f.data[SESSION_KEY].warning = "Screenshots unavailable.";
+  f.transport.target = "http://127.0.0.1:9999"; // A later preference cannot retarget this capture.
+  const result = await f.send("extension.stopRecording");
+  assert.equal(result.status, "automation");
+  assert.equal(result.result.automation.status, "queued");
+  assert.equal(result.result.warning, "Screenshots unavailable.");
+  assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
+  const payload = JSON.parse(f.calls.fetch.find((call) => call.url.endsWith("/record")).init.body);
+  assert.deepEqual(payload.automation, automaticPolicy);
+  await assert.rejects(f.send("extension.retryGeneration"), /owns draft generation/);
+  await assert.rejects(f.start(), /Finish or cancel/);
+  assert.equal(f.alarms.get(AUTOMATION_ALARM).periodInMinutes, 1);
+});
+
+test("offline automatic upload gets at most three durable retries with unchanged identity, start and policy", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic();
+  await f.send("extension.stopRecording");
+  const first = f.calls.fetch.find((call) => call.url.endsWith("/record")).init.body;
+  for (const delay of [60001, 120001, 240001, 600001]) {
+    f.restartWorker(); f.advance(delay);
+    await f.controller.alarm(AUTOMATION_ALARM);
+  }
+  const uploads = f.calls.fetch.filter((call) => call.url.endsWith("/record"));
+  assert.equal(uploads.length, 4);
+  assert.ok(uploads.every((call) => call.init.body === first));
+  assert.equal(f.data[SESSION_KEY].uploadAttempts, 4);
+  assert.equal(f.data[SESSION_KEY].nextUploadRetryAt, null);
+  assert.equal(f.alarms.has(AUTOMATION_ALARM), false);
+  await f.send("extension.retryUpload");
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 4);
+});
+
+test("expired upload consent is not renewed by worker recovery or manual retry", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  f.advance(86400001); f.restartWorker();
+  await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.data[SESSION_KEY].nextUploadRetryAt, null);
+  assert.match(f.data[SESSION_KEY].error, /24-hour/);
+  await f.send("extension.retryUpload");
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+});
+
+test("browser restart or navigation does not silently upload an active automatic capture", async () => {
+  for (const interrupt of [async (f) => { delete f.sessionData[BROWSER_KEY]; f.restartWorker(); }, async (f) => f.controller.tabUpdated(7, { url: "https://elsewhere.test" }, {})]) {
+    const f = automaticFixture(); await f.startAutomatic(); await f.event();
+    await interrupt(f); await f.controller.alarm(AUTOMATION_ALARM);
+    assert.equal(f.data[SESSION_KEY].status, "pending");
+    assert.equal(f.calls.fetch.some((call) => call.url.endsWith("/record")), false);
+    await f.send("extension.retryUpload");
+    assert.equal(f.data[RESULT_KEY].status, "automation");
+  }
+});
+
+test("already-stopped interrupted automatic upload resumes safely after browser restart", async () => {
+  const f = automaticFixture(); await f.startAutomatic();
+  Object.assign(f.data[SESSION_KEY], { status: "saving", uploadAttempts: 1, endTime: f.data[SESSION_KEY].startTime + 100, stopReason: "user" });
+  delete f.sessionData[BROWSER_KEY]; f.restartWorker();
+  await f.send("extension.getStatus");
+  assert.equal(f.data[SESSION_KEY].status, "pending");
+  f.advance(60001); await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.data[RESULT_KEY].automation.status, "queued");
+});
+
+test("saved backend automation is polled after worker restart without uploading or generating again", async () => {
+  const f = automaticFixture(); await f.startAutomatic(); await f.send("extension.stopRecording");
+  f.alarms.clear(); f.restartWorker();
+  await f.send("extension.getStatus");
+  assert.equal(f.alarms.get(AUTOMATION_ALARM).periodInMinutes, 1);
+  f.transport.state = "delivered"; f.transport.count = 1; f.transport.delivered = 1;
+  f.advance(60001); await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.data[RESULT_KEY].automation.delivered_count, 1);
+  assert.equal(f.alarms.has(AUTOMATION_ALARM), false);
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+  assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
+});
+
+test("lost delivery status stays unknown and does not launch manual generation", async () => {
+  const f = automaticFixture(); await f.startAutomatic(); f.transport.failStatus = true;
+  await f.send("extension.stopRecording");
+  assert.match(f.data[RESULT_KEY].error, /status is unknown/);
+  assert.equal(f.data[RESULT_KEY].automation, undefined);
+  assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
+  await assert.rejects(f.start(), /Finish or cancel/);
+});
+
+test("over-cap proposed drafts are a known terminal block, not an unknown delivery", async () => {
+  const f = automaticFixture(); await f.startAutomatic();
+  f.transport.state = "blocked"; f.transport.count = 6;
+  await f.send("extension.stopRecording");
+  assert.equal(f.data[RESULT_KEY].automation.status, "blocked");
+  assert.equal(f.data[RESULT_KEY].error, "");
+  assert.equal(f.alarms.has(AUTOMATION_ALARM), false);
+  await f.start();
+});
+
+test("cancelling before upload withdraws delivery, and capture consent revocation cannot send automation", async () => {
+  for (const command of ["extension.cancelAutomation", "extension.setEnabled"]) {
+    const f = automaticFixture(); await f.startAutomatic();
+    await f.send(command, { enabled: false });
+    if (command === "extension.cancelAutomation") {
+      assert.equal(f.data[SESSION_KEY].automationWithdrawn, true);
+      assert.deepEqual(f.data[SESSION_KEY].automation, automaticPolicy);
+      await f.send("extension.stopRecording");
+    }
+    const upload = f.calls.fetch.find((call) => call.url.endsWith("/record"));
+    assert.equal(JSON.parse(upload.init.body).automation, undefined);
+    assert.equal(f.data[RESULT_KEY].status, "ready");
+  }
+});
+
+test("cancellation after a lost upload response reconciles stable identity and keeps partial receipts", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  const id = f.data[SESSION_KEY].recordingId;
+  f.transport.count = 2; f.transport.delivered = 1;
+  await f.send("extension.cancelAutomation");
+  assert.equal(f.data[SESSION_KEY], undefined);
+  assert.equal(f.data[RESULT_KEY].id, id);
+  assert.equal(f.data[RESULT_KEY].automation.status, "cancelled");
+  assert.equal(f.data[RESULT_KEY].automation.delivered_count, 1);
+  assert.match(f.data[RESULT_KEY].automation.deliveries[0].ticket_url, /ticket=fixture/);
+  await assert.rejects(f.send("extension.retryAutomation"), /retry-wait/);
+});
+
+test("failed cancellation stops uploads but never claims discard cancelled an unknown backend job", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  f.transport.failStatus = true; await f.send("extension.cancelAutomation");
+  assert.equal(f.data[SESSION_KEY].nextUploadRetryAt, null);
+  assert.match(f.data[SESSION_KEY].error, /cancellation is unconfirmed/);
+  await assert.rejects(f.send("extension.retryUpload"), /Cancellation is unconfirmed/);
+  await assert.rejects(f.send("extension.discardCapture"), /Confirm cancellation/);
+  f.advance(60001); await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+});
+
+test("durable backend cancellation tombstone makes a never-accepted offline capture safely discardable", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  f.transport.tombstone = true; await f.send("extension.cancelAutomation");
+  assert.equal(f.data[SESSION_KEY].cancellationConfirmed, true);
+  assert.equal(f.data[SESSION_KEY].automationWithdrawn, true);
+  assert.equal(f.data[SESSION_KEY].cancelRequested, false);
+  await assert.rejects(f.send("extension.retryUpload"), /identity was cancelled/);
+  await f.send("extension.discardCapture");
+  assert.equal(f.data[SESSION_KEY], undefined);
+  await f.start();
+});
+
+test("manual retry sends only the existing backend job identity and cannot change its policy", async () => {
+  const f = automaticFixture(); await f.startAutomatic({ use_ai: true });
+  f.transport.state = "retry_wait"; await f.send("extension.stopRecording");
+  const id = f.data[RESULT_KEY].id;
+  await f.send("extension.retryAutomation", { target_url: "http://127.0.0.1:9999", use_ai: false });
+  const request = f.calls.fetch.at(-1);
+  assert.ok(request.url.endsWith(`/automation/${id}`));
+  assert.deepEqual(JSON.parse(request.init.body), { action: "retry" });
+  assert.equal(f.data[RESULT_KEY].automationPolicy.use_ai, true);
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+});
+
+test("read-only pending upload reconciliation discovers the original job without replay or cancellation", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  const id = f.data[SESSION_KEY].recordingId;
+  const response = await f.send("extension.refreshAutomation");
+  assert.equal(response.result.id, id);
+  assert.equal(response.result.automation.status, "queued");
+  assert.equal(f.data[SESSION_KEY], undefined);
+  assert.equal(f.calls.fetch.at(-1).init.method, undefined);
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+  assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
+});
+
+test("unknown read-only reconciliation preserves pending capture and does not infer safe discard", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  f.transport.failStatus = true;
+  await f.send("extension.refreshAutomation");
+  assert.match(f.data[SESSION_KEY].error, /acceptance is still unknown/);
+  await assert.rejects(f.send("extension.discardCapture"), /Confirm cancellation/);
+  assert.equal(f.calls.fetch.filter((call) => call.url.endsWith("/record")).length, 1);
+});
+
+test("unverified policy, authority, expiry, or receipt counts never replace the last valid backend status", async () => {
+  const f = automaticFixture(); await f.startAutomatic(); await f.send("extension.stopRecording");
+  const valid = clone(f.data[RESULT_KEY].automation);
+  for (const patch of [{ target_url: "http://127.0.0.1:9999" }, { use_ai: true }, { max_tickets: 4 }, { execution_authorized: true }, { expires_at: valid.expires_at + 1 }, { ticket_count: 1, delivered_count: 1, deliveries: [] }]) {
+    f.setFetch(async () => ({ ok: true, json: async () => ({ ...valid, ...patch }) }));
+    await f.send("extension.refreshAutomation");
+    assert.deepEqual(f.data[RESULT_KEY].automation, valid);
+    assert.match(f.data[RESULT_KEY].error, /unverified delivery status/);
+  }
+  assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
 });

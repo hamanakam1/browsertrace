@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Panther Intent Capture",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Capture chosen-page interactions locally and generate reviewable improvement tickets.",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "alarms"
   ],
   "host_permissions": [
     "http://127.0.0.1:7890/*"
