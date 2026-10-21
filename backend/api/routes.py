@@ -19,6 +19,7 @@ from storage import (
 )
 from inference import run_inference
 from redaction import sanitize_events
+from tickets import decompose_session, save_tickets, load_tickets
 
 UPLOAD_LIMIT = 64 * 1024 * 1024  # 64MB max upload
 
@@ -57,6 +58,10 @@ def _route(method: str, path: str) -> Optional[Tuple[str, Dict[str, str]]]:
         return ("infer", {"id": parts[3]})
     if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "infer"]:
         return ("get_inference", {"id": parts[3]})
+    if method == "POST" and len(parts) == 4 and parts[:3] == ["api", "extension", "tickets"]:
+        return ("decompose_tickets", {"id": parts[3]})
+    if method == "GET" and len(parts) == 4 and parts[:3] == ["api", "extension", "tickets"]:
+        return ("get_tickets", {"id": parts[3]})
     if method == "GET" and parts == ["api", "extension", "health"]:
         return ("health", {})
     return None
@@ -94,32 +99,43 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
             except json.JSONDecodeError:
                 events = []
             events = sanitize_events(events)
+            screenshots_raw = fields.get("screenshots", "[]")
+            try:
+                screenshots = json.loads(screenshots_raw)
+            except json.JSONDecodeError:
+                screenshots = []
             tab_id = int(fields.get("tabId", "0") or 0)
             start_time = float(fields.get("startTime", "0") or 0)
             end_time = float(fields.get("endTime", str(time.time())) or time.time())
             extension_id = fields.get("extensionId", "unknown")
 
-            # write video + events to disk
+            # write video + events + screenshots to disk
             rec_dir = os.path.join(os.path.expanduser("~"), ".panther-intent-capture", "recordings")
             os.makedirs(rec_dir, exist_ok=True)
             rec_id = uuid.uuid4().hex
             video_name = f"{rec_id}.webm"
             events_name = f"{rec_id}.json"
+            screenshots_name = f"{rec_id}_screenshots.json"
             video_path = os.path.join(rec_dir, video_name)
             events_path = os.path.join(rec_dir, events_name)
+            screenshots_path = os.path.join(rec_dir, screenshots_name)
             with open(video_path, "wb") as f:
                 f.write(video_file)
             with open(events_path, "w") as f:
                 json.dump(events, f)
+            with open(screenshots_path, "w") as f:
+                json.dump(screenshots, f)
 
             recording_id = create_recording(
                 tab_id=tab_id,
                 start_time=start_time,
                 end_time=end_time,
                 event_count=len(events) if isinstance(events, list) else 0,
+                screenshot_count=len(screenshots) if isinstance(screenshots, list) else 0,
                 extension_id=extension_id,
                 video_path=video_path,
                 events_path=events_path,
+                screenshots_path=screenshots_path,
                 video_size=os.path.getsize(video_path),
             )
             _json(handler, 201, {"id": recording_id, "event_count": len(events) if isinstance(events, list) else 0})
@@ -181,6 +197,36 @@ def handle_request(handler: BaseHTTPRequestHandler) -> None:
                 _json(handler, 404, {"error": "inference result not found"})
                 return
             _json(handler, 200, result)
+            return
+
+        if name == "decompose_tickets":
+            entry = get_recording(params["id"])
+            if not entry:
+                _json(handler, 404, {"error": "recording not found"})
+                return
+            # Check if tickets already exist for this recording.
+            existing = load_tickets(params["id"])
+            if existing:
+                _json(handler, 200, {"id": existing["id"], "tickets": existing["data"]["tickets"], "cached": True})
+                return
+            events_path = entry.get("events_path", "")
+            events = []
+            if events_path and os.path.exists(events_path):
+                try:
+                    events = json.loads(open(events_path).read())
+                except (json.JSONDecodeError, OSError):
+                    events = []
+            data = decompose_session(entry.get("video_path", ""), events)
+            ticket_id = save_tickets(params["id"], data)
+            _json(handler, 200, {"id": ticket_id, "tickets": data["tickets"], "cached": False})
+            return
+
+        if name == "get_tickets":
+            existing = load_tickets(params["id"])
+            if not existing:
+                _json(handler, 404, {"error": "tickets not found for this recording"})
+                return
+            _json(handler, 200, {"id": existing["id"], "tickets": existing["data"]["tickets"], "cached": True})
             return
 
     except ValueError as exc:

@@ -45,9 +45,11 @@ def create_recording(
     start_time: float,
     end_time: float,
     event_count: int,
+    screenshot_count: int,
     extension_id: str,
     video_path: Path,
     events_path: Path,
+    screenshots_path: Path,
     video_size: int,
 ) -> str:
     ensure_dirs()
@@ -60,9 +62,11 @@ def create_recording(
         "end_time": end_time,
         "duration_ms": int((end_time - start_time) * 1000),
         "event_count": event_count,
+        "screenshot_count": screenshot_count,
         "extension_id": extension_id,
         "video_path": str(video_path),
         "events_path": str(events_path),
+        "screenshots_path": str(screenshots_path),
         "video_size": video_size,
         "created_at": time.time(),
         "inference": None,
@@ -92,6 +96,7 @@ def list_recordings() -> List[Dict[str, Any]]:
             "end_time": e["end_time"],
             "duration_ms": e["duration_ms"],
             "event_count": e["event_count"],
+            "screenshot_count": e.get("screenshot_count", 0),
             "created_at": e["created_at"],
             "has_inference": e.get("inference") is not None,
         }

@@ -25,3 +25,6 @@
 .banner { padding: 6px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
 .banner.warn { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
 .banner code { font-size: 11px; background: #fff; padding: 1px 4px; border-radius: 3px; color: #92400e; }
+
+.ticket-card .btn-primary { background: #06b6d4; border-color: #06b6d4; }
+.ticket-card .btn-primary:hover { background: #0891b2; }

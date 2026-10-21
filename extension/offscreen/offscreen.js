@@ -4,10 +4,12 @@ let mediaRecorder = null;
 let stream = null;
 let chunks = [];
 let port = null;
+let captureAudio = false;
 
-async function startCapture(tabId) {
+async function startCapture(tabId, audio = false) {
+  captureAudio = audio;
   try {
-    stream = await chrome.tabCapture.capture({ targetTabId: tabId, audio: false, video: true });
+    stream = await chrome.tabCapture.capture({ targetTabId: tabId, audio: captureAudio, video: true });
   } catch (err) {
     chrome.runtime.sendMessage({ type: "capture.error", error: String(err) });
     return;
@@ -18,7 +20,8 @@ async function startCapture(tabId) {
   }
 
   chunks = [];
-  mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+  const mimeType = captureAudio ? "video/webm" : "video/webm";
+  mediaRecorder = new MediaRecorder(stream, { mimeType });
   mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   mediaRecorder.onstop = () => {
     stream.getTracks().forEach((t) => t.stop());
@@ -43,7 +46,7 @@ chrome.runtime.onConnect.addListener((p) => {
   port = p;
   port.onMessage.addListener(async (msg) => {
     if (msg.type === "offscreen.start") {
-      await startCapture(msg.tabId);
+      await startCapture(msg.tabId, msg.audio);
     } else if (msg.type === "offscreen.stop") {
       await stopCapture();
       if (port) port.postMessage({ type: "offscreen.stopped", chunks });

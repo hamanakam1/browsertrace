@@ -15,6 +15,7 @@ const stopBtn = document.getElementById("stopBtn");
 const metaEl = document.getElementById("meta");
 const logEl = document.getElementById("log");
 const backendBanner = document.getElementById("backendBanner");
+const audioEl = document.getElementById("audio");
 
 let enabled = false;
 let recording = false;
@@ -48,6 +49,7 @@ async function refresh() {
   enabled = !!state.enabled;
   recording = !!state.recording;
   consentEl.checked = enabled;
+  audioEl.checked = !!state.audio;
   setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
   if (recording) {
     metaEl.textContent = `Session started ${new Date(state.sessionStart || 0).toLocaleTimeString()}`;
@@ -71,6 +73,10 @@ consentEl.addEventListener("change", async () => {
   await chrome.runtime.sendMessage({ type: "extension.setEnabled", enabled });
   setStatus(recording ? STATUS.RECORDING : STATUS.IDLE);
   renderLog();
+});
+
+audioEl.addEventListener("change", async () => {
+  await setState({ audio: audioEl.checked });
 });
 
 recordBtn.addEventListener("click", async () => {

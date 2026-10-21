@@ -22,7 +22,7 @@
     <table id="recordingsTable" style="display:none">
       <thead>
         <tr>
-          <th>Started</th><th>URL</th><th>Duration</th><th>Events</th><th>Inference</th><th>Video</th><th>Actions</th>
+          <th>Started</th><th>URL</th><th>Duration</th><th>Events</th><th>Screenshots</th><th>Inference</th><th>Tickets</th><th>Actions</th>
         </tr>
       </thead>
       <tbody id="recordingsBody"></tbody>
@@ -46,6 +46,12 @@
       <pre id="inferenceBody"></pre>
     </div>
     <div id="inferenceEmpty" class="empty" style="margin-top:16px;">No inference result yet.</div>
+    <div id="ticketsView" style="margin-top:16px; display:none">
+      <h3 style="font-size:14px; margin:0 0 8px 0;">Intent Tickets</h3>
+      <div id="ticketsMeta" style="font-size:12px; color:#6b7280; margin-bottom:8px;"></div>
+      <div id="ticketsBody"></div>
+    </div>
+    <div id="ticketsEmpty" class="empty" style="margin-top:16px;">No tickets yet. Click "Generate Tickets" on a recording.</div>
   </div>
 
   <div class="footer">

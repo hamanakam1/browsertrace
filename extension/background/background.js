@@ -3,10 +3,12 @@ import { recordConsentEvent } from "./shared/audit.js";
 import { sanitizeEventPayload } from "./shared/redaction.js";
 
 const EXTENSION_ID = chrome.runtime.id;
-let recordingSession = null; // { tabId, startTime, chunks, events, port }
+let recordingSession = null; // { tabId, startTime, chunks, events, port, screenshots }
 
 const RECORD_API = `${BACKEND_ORIGIN}/api/extension/record`;
 const CONSENT_LOG_KEY = "extension.consent.log";
+const SCREENSHOT_COOLDOWN_MS = 1500;
+let lastScreenshotTs = 0;
 
 /** Ensure an offscreen document exists so MediaRecorder survives SW suspension. */
 async function ensureOffscreen() {
@@ -40,6 +42,17 @@ async function connectOffscreen() {
   return await chrome.runtime.connect({ name: "offscreen" });
 }
 
+/** Capture a screenshot of the active tab as a data URL. */
+async function captureTabScreenshot(tabId) {
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: "jpeg", quality: 70 });
+    return dataUrl;
+  } catch (err) {
+    console.debug("panther-intent-capture: screenshot capture failed", err);
+    return null;
+  }
+}
+
 /** Start recording the given tab. Works on any webpage. */
 async function startRecording(tabId) {
   if (recordingSession) throw new Error("Already recording.");
@@ -49,8 +62,14 @@ async function startRecording(tabId) {
     throw new Error("Recording is scoped to the active tab.");
   }
 
+  let sessionAudio = false;
+  try {
+    const st = await chrome.storage.local.get("extension.local.state");
+    sessionAudio = !!((st && st["extension.local.state"] && st["extension.local.state"].audio) || false);
+  } catch (_) {}
+
   const port = await connectOffscreen();
-  port.postMessage({ type: "offscreen.start", tabId });
+  port.postMessage({ type: "offscreen.start", tabId, audio: sessionAudio });
 
   let captureStarted = false;
   const captureReady = new Promise((resolve, reject) => {
@@ -65,7 +84,8 @@ async function startRecording(tabId) {
   port.onMessage.removeListener(() => {});
 
   const chunks = [];
-  recordingSession = { tabId, startTime: Date.now(), chunks, events: [], port };
+  const screenshots = []; // { ts, dataUrl }
+  recordingSession = { tabId, startTime: Date.now(), chunks, events: [], port, screenshots };
 
   chrome.runtime.onMessage.addListener(handleContentMessage);
 
@@ -78,7 +98,7 @@ async function startRecording(tabId) {
   return { tabId, startTime: recordingSession.startTime };
 }
 
-/** Stop recording, flush video + events to the backend. */
+/** Stop recording, flush video + events + screenshots to the backend. */
 async function stopRecording() {
   const session = recordingSession;
   if (!session) return null;
@@ -102,6 +122,7 @@ async function stopRecording() {
   const form = new FormData();
   form.append("video", blob, `record-${session.startTime}.webm`);
   form.append("events", JSON.stringify(session.events));
+  form.append("screenshots", JSON.stringify(session.screenshots));
   form.append("tabId", String(session.tabId));
   form.append("startTime", String(session.startTime));
   form.append("endTime", String(Date.now()));
@@ -113,7 +134,8 @@ async function stopRecording() {
   await auditConsent("stop", {
     tabId: session.tabId,
     durationMs: Date.now() - session.startTime,
-    eventCount: session.events.length
+    eventCount: session.events.length,
+    screenshotCount: session.screenshots.length
   });
 
   await chrome.action.setBadgeText({ text: "", tabId: session.tabId });
@@ -122,7 +144,8 @@ async function stopRecording() {
     tabId: session.tabId,
     startTime: session.startTime,
     endTime: Date.now(),
-    eventCount: session.events.length
+    eventCount: session.events.length,
+    screenshotCount: session.screenshots.length
   };
 
   recordingSession = null;
@@ -134,7 +157,23 @@ async function stopRecording() {
 function handleContentMessage(message, sender, sendResponse) {
   if (message.type !== "page.interaction") return;
   if (!recordingSession || sender.tab.id !== recordingSession.tabId) return;
-  recordingSession.events.push(sanitizeEventPayload(message.payload));
+
+  const payload = sanitizeEventPayload(message.payload);
+  recordingSession.events.push(payload);
+
+  // Capture screenshot at decision points (with cooldown).
+  if (payload.wantsScreenshot) {
+    const now = Date.now();
+    if (now - lastScreenshotTs >= SCREENSHOT_COOLDOWN_MS) {
+      captureTabScreenshot(sender.tab.id).then((dataUrl) => {
+        if (dataUrl) {
+          recordingSession.screenshots.push({ ts: payload.ts, dataUrl });
+          lastScreenshotTs = now;
+        }
+      });
+    }
+  }
+
   sendResponse({ ok: true });
   return true;
 }
