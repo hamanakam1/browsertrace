@@ -135,3 +135,4 @@ See [integration contracts](INTEGRATIONS.md), [automation behavior](AUTOMATION.m
 - Plugin system for custom adapters
 - Enhanced redaction rules
 - Browser sync (explicitly not planned for privacy)
+ 
