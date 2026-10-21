@@ -1,15 +1,26 @@
 # panther-intent-capture
 
 ```
-      ___
-     /   \
-    | o o |    eyes — observe
-    |  ^  |    intent cursor
-     \ _ /
-    /     \
-   /       \
-  |_________|
-   panther
+              ___
+             /   \
+            /  _  \
+           | (o o) |   eyes — observe
+           |   ^   |   intent cursor
+            \  -  /
+           /   |   \
+          /    |    \
+         /     |     \
+        |      |      |
+        |      |      |
+       /       |       \
+      /        |        \
+     |   \     |     /   |
+     |    \    |    /    |
+      \    \   |   /    /
+       \    \  |  /    /
+        \    \ | /    /
+         \____\|/____/
+          panther
 ```
 
 > Decompose intent on a website or portal. Turn that intelligence into tickets, with screenshots, audio, and video — so coding agents can take action based on what was captured.
