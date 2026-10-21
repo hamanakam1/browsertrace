@@ -30,6 +30,14 @@ Panther records the interactions you choose to capture, keeps the evidence on yo
 
 The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. Browser-controlled backend startup is packaged for macOS and Linux; Windows helper packaging remains unimplemented. Capture works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
+## Interactive system guide
+
+**[Explore the Panther → AI Dashboard → Taskrivet system atlas](https://hamanakam1.github.io/panther-intent-capture/)**
+
+A screenshot-led, five-step walkthrough with an interactive Archify map, current-versus-planned connections, and technical details about privacy, delivery verification, execution authority and acceptance. The Taskrivet execution adapter is clearly labeled planned; its current dashboard connection is read-only.
+
+[View the guide source and rebuild instructions](https://github.com/hamanakam1/panther-intent-capture/tree/gh-pages).
+
 ## What works in this version
 
 - **Chosen-tab capture:** start from the extension popup; record clicks, changes, submissions, and navigation within that tab's origin. Capture starts off. Typed values, typed keys, and full page text are excluded.
