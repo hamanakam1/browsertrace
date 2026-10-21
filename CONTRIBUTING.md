@@ -53,6 +53,10 @@ python3 scripts/package_extension.py
 
 Public source, documentation, issues, screenshots, and examples must not identify a contributor's private systems or deployments. Use generic adapter names and synthetic origins, ticket data, and fixtures. Keep installation paths, internal architecture, real operational screenshots, and deployment-specific evidence local. A public repository is not permission to publish the systems that integrate with it.
 
+The [public-content privacy check](docs/public-content-privacy.md) scans tracked
+content using a private policy. Keep its real entries out of public fixtures and
+logs; changes to workflows or the checker need a maintainer-reviewed manual scan.
+
 Any feature that captures or stores user data must:
 - Be opt-in
 - Minimize captured data and filter common secrets; never describe screenshot pixels as redacted
