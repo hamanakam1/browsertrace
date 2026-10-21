@@ -130,10 +130,10 @@ test("allowlisted event metadata drops input values, keys, arbitrary bodies and 
 });
 
 test("captures dashboard semantic references and preserves safe routes", () => {
-  const out = sanitizeCaptureEvent({ type: "click", url: "http://127.0.0.1:7878/#master", target: { tag: "button", dataTab: "master", dataTicket: "M-12345", label: "Open" } }, 123);
+  const out = sanitizeCaptureEvent({ type: "click", url: "http://127.0.0.1:8080/#master", target: { tag: "button", dataTab: "master", dataTicket: "M-12345", label: "Open" } }, 123);
   assert.equal(out.target.dataTab, "master");
   assert.equal(out.target.dataTicket, "M-12345");
-  assert.equal(out.url, "http://127.0.0.1:7878/#master");
+  assert.equal(out.url, "http://127.0.0.1:8080/#master");
   assert.equal(out.ts, 123);
   assert.equal(sanitizeCaptureEvent({ type: "keydown", key: "x" }), null);
   assert.equal(sanitizeUrl("https://app.test/reset/token/secret-value?query=secret#token=secret"), "https://app.test/reset/token/REDACTED");
@@ -347,13 +347,13 @@ test("discard requires a stopped session and deletes only its local capture", as
   assert.equal(f.data[SETTINGS_KEY].enabled, true);
 });
 
-const automaticPolicy = { enabled: true, consent: true, target_url: "http://127.0.0.1:7878", use_ai: false, max_tickets: 5 };
+const automaticPolicy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 
 function automaticFixture() {
   const transport = { failUpload: false, failStatus: false, target: automaticPolicy.target_url, state: "queued", count: 0, delivered: 0, tombstone: false };
   let policy, savedId, expiresAt;
   const f = fixture({ fetch: async (url, init = {}) => {
-    if (url.endsWith("/integrations/ai-dashboard")) return { ok: true, json: async () => ({ ok: false, url: transport.target }) };
+    if (url.endsWith("/integrations/ticket-service")) return { ok: true, json: async () => ({ ok: false, url: transport.target }) };
     if (url.endsWith("/record")) {
       const payload = JSON.parse(init.body);
       savedId = f.data[SESSION_KEY].recordingId;
@@ -371,7 +371,7 @@ function automaticFixture() {
       if (action === "retry") transport.state = "queued";
       return { ok: true, json: async () => ({ ok: true, recording_id: id, status: transport.state, stage: "generation", ticket_count: transport.count,
         delivered_count: transport.delivered, attempts: 1, next_retry_at: null, error: transport.state === "blocked" ? "Safety check blocked delivery" : "",
-        deliveries: transport.delivered ? [{ ticket_id: "draft-1", state: "delivered", verified: true, ticket_url: "http://127.0.0.1:7878/?ticket=fixture" }] : [],
+        deliveries: transport.delivered ? [{ ticket_id: "draft-1", state: "delivered", verified: true, ticket_url: "http://127.0.0.1:8080/?ticket=fixture" }] : [],
         target_url: policy.target_url, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
     }
     return { ok: true, json: async () => ({ tickets: [] }) };

@@ -44,7 +44,7 @@ class HttpTests(unittest.TestCase):
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
         self.capture = {"sessionId": "test-capture-123", "extensionId": "test-extension", "consent": True,
                         "tabId": 1, "startTime": 1700000000000, "endTime": 1700000005000,
-                        "url": "http://127.0.0.1:7878/?token=secret#cockpit", "title": "Synthetic dashboard",
+                        "url": "http://127.0.0.1:8080/?token=secret#cockpit", "title": "Synthetic dashboard",
                         "goal": "Keep the selected tab after refreshing",
                         "events": [{"type": "click", "ts": 1700000001000, "target": {"tag": "BUTTON", "text": "Cockpit"}}]}
 
@@ -95,15 +95,15 @@ class HttpTests(unittest.TestCase):
         code, exported, _ = self.request(f"/api/extension/export/{rid}")
         self.assertEqual(exported["tickets"][0]["title"], "Preserve selected tab")
         self.assertFalse(exported["authority"]["execution_authorized"])
-        with patch.object(routes, "submit_ticket") as submit:
-            code, preview, _ = self.request(f"/api/extension/integrations/ai-dashboard/preview/{rid}", body)
+        with patch.object(routes, "submit_ticket") as submit, patch.dict("os.environ", {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080"}):
+            code, preview, _ = self.request(f"/api/extension/integrations/ticket-service/preview/{rid}", body)
             self.assertEqual(code, 200, preview)
             self.assertIn("no-auto", preview["payload"]["tags"])
-            code, denied, _ = self.request(f"/api/extension/integrations/ai-dashboard/submit/{rid}", body)
+            code, denied, _ = self.request(f"/api/extension/integrations/ticket-service/submit/{rid}", body)
             self.assertEqual(code, 409)
             submit.assert_not_called()
             submit.return_value = {"ok": True, "state": "delivered", "verified": True}
-            code, delivered, _ = self.request(f"/api/extension/integrations/ai-dashboard/submit/{rid}", {
+            code, delivered, _ = self.request(f"/api/extension/integrations/ticket-service/submit/{rid}", {
                 **body, "confirmed": True, "payload_hash": preview["payload_hash"]})
             self.assertEqual(code, 200, delivered)
             submit.assert_called_once()

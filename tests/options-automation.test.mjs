@@ -27,9 +27,9 @@ test("stale and unknown status fail closed without claiming delivery or allowing
   assert.equal(automationView(null).locked, true);
 });
 test("receipt links must match the admitted loopback target", () => {
-  const target = "http://127.0.0.1:7878";
+  const target = "http://127.0.0.1:8080";
   assert.equal(safeTicketURL(target + "/#ticket/example", target), target + "/#ticket/example");
-  for (const value of ["javascript:alert(1)", "https://example.com", "http://user@127.0.0.1:7878", "http://127.0.0.1:9999", "http://localhost:7878", "/relative"]) {
+  for (const value of ["javascript:alert(1)", "https://example.com", "http://user@127.0.0.1:8080", "http://127.0.0.1:9999", "http://localhost:8080", "/relative"]) {
     assert.equal(safeTicketURL(value, target), null);
   }
 });

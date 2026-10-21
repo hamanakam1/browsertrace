@@ -109,9 +109,10 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   }
 
   async function automationTarget() {
-    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/ai-dashboard`, { signal: AbortSignal.timeout(5000) });
+    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/ticket-service`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`Dashboard configuration returned HTTP ${response.status}.`);
     const body = await response.json();
+    if (!body.url) throw new Error("Configure a local ticket destination before enabling automatic delivery.");
     // Reachability may be false while the configured canonical destination is known.
     const url = new URL(body.url);
     if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/" ||

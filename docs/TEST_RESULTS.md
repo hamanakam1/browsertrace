@@ -50,11 +50,11 @@ The initial model output invented narrative evidence. That test drove the genera
 ## Not yet qualified
 
 - A normal toolbar-initiated capture in the operator's Edge profile, including successful screenshot permission and pixels.
-- Real-world workflows on AI Dashboard and representative third-party sites, including site-specific SPA and frame behavior.
-- An explicitly confirmed write to the live AI Dashboard and its independent readback. Only the live health route was checked for reachability; all delivery tests used fake servers.
+- Real-world workflows on local ticket service and representative third-party sites, including site-specific SPA and frame behavior.
+- An explicitly confirmed write to the live local ticket service and its independent readback. Only the live health route was checked for reachability; all delivery tests used fake servers.
 - Long-duration/resource use, hardware power loss, accessibility with assistive technology, Windows/Linux desktop UI, and extension-store installation.
 - Firefox, Safari, native desktop applications, video/audio, and built-in GitHub/Jira/Linear destinations. These are not supported capabilities of this release.
 
 ## First pilot
 
-Start the backend with a private data directory, load `extension/` in Chrome or Edge, open a harmless workflow, and use Panther's actual toolbar button. Confirm capture consent, leave screenshots off initially, reproduce the workflow, stop, and inspect every observed step. Then test separately consented screenshots. For AI Dashboard, inspect the exact preview and confirm one clearly labeled pilot ticket only when its content is safe to share; verify the returned ticket and review fences independently. Capture consent does not grant autonomous execution authority.
+Start the backend with a private data directory, load `extension/` in Chrome or Edge, open a harmless workflow, and use Panther's actual toolbar button. Confirm capture consent, leave screenshots off initially, reproduce the workflow, stop, and inspect every observed step. Then test separately consented screenshots. For local ticket service, inspect the exact preview and confirm one clearly labeled pilot ticket only when its content is safe to share; verify the returned ticket and review fences independently. Capture consent does not grant autonomous execution authority.

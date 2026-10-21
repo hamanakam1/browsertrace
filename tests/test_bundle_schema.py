@@ -26,14 +26,14 @@ except ImportError:
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "intent-bundle.schema.json"
 SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 RECORDING = {
-    "id": "schema-capture-1", "url": "http://127.0.0.1:7878/?token=private#work-board",
+    "id": "schema-capture-1", "url": "http://127.0.0.1:8080/?token=private#work-board",
     "title": "Synthetic dashboard", "goal": "Keep my selected filter after navigation",
     "capture_mode": "events", "start_time": 1000.25, "end_time": 1002.75,
     "duration_ms": 2500, "event_count": 2, "screenshot_count": 1,
 }
 EVENTS = [
     {"type": "click", "ts": 1000250, "target": {"tag": "button", "label": "Choose filter"}},
-    {"type": "navigation", "ts": 1001250, "url": "http://127.0.0.1:7878/#work-board"},
+    {"type": "navigation", "ts": 1001250, "url": "http://127.0.0.1:8080/#work-board"},
 ]
 MODEL_RESPONSE = [{
     "title": "Keep the filter selected", "description": "The filter may reset after navigation.",

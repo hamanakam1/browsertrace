@@ -50,10 +50,18 @@ class InstallerTests(unittest.TestCase):
         plan = installer.plan_install(**self.args, user_data_dir=profile)
         self.assertEqual(plan["manifest"].parent, profile / "NativeMessagingHosts")
 
+    def test_default_setup_has_no_destination_and_explicit_setup_pins_one(self):
+        plan = installer.plan_install(**self.args)
+        config_path = plan["helper_dir"] / "config.json"
+        self.assertNotIn("dashboard_url", json.loads(plan["files"][config_path][0]))
+        plan = installer.plan_install(**self.args, dashboard_url="http://localhost:8080")
+        self.assertEqual(json.loads(plan["files"][config_path][0])["dashboard_url"],
+                         "http://localhost:8080")
+
     def test_invalid_ids_remote_urls_and_platforms_create_nothing(self):
         variants = ({"extension_id": "../../bad"}, {"extension_id": "z" * 32},
-                    {"dashboard_url": "https://example.com"}, {"dashboard_url": "http://user@127.0.0.1:7878"},
-                    {"dashboard_url": "http://@127.0.0.1:7878"}, {"dashboard_url": "http://[::1%25lo0]:7878"},
+                    {"dashboard_url": "https://example.com"}, {"dashboard_url": "http://user@127.0.0.1:8080"},
+                    {"dashboard_url": "http://@127.0.0.1:8080"}, {"dashboard_url": "http://[::1%25lo0]:8080"},
                     {"ollama_model": "model\tname"},
                     {"ollama_endpoint": "https://127.0.0.1:11434/v1"}, {"platform": "win32"},
                     {"data_dir": Path("relative")})

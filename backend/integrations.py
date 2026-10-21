@@ -163,7 +163,9 @@ def export_bundle(recording: dict, data: dict) -> dict:
 
 
 def _target() -> str:
-    raw = os.environ.get("PANTHER_DASHBOARD_URL", "http://127.0.0.1:7878")
+    raw = os.environ.get("PANTHER_DASHBOARD_URL", "")
+    if not raw:
+        raise ValueError("Configure PANTHER_DASHBOARD_URL before using ticket delivery")
     try:
         url = urllib.parse.urlsplit(raw)
         host = url.hostname
@@ -219,7 +221,10 @@ def _request(target: str, path: str, payload: dict | None = None, *, before_send
 
 def dashboard_status() -> dict:
     """Check reachability only; no private ticket data or writes."""
-    target = _target()
+    try:
+        target = _target()
+    except ValueError as exc:
+        return {"ok": False, "state": "unconfigured", "url": "", "error": _error(exc)}
     try:
         data = _request(target, "/healthz")
         ok = data.get("ok") is True
@@ -295,7 +300,7 @@ def preview_ticket(recording: dict, ticket: dict) -> dict:
         warnings.append("The dashboard title is shortened to 200 characters.")
     payload = {
         "seed_key": seed, "source": SOURCE, "title": draft["title"][:200], "detail": detail,
-        "system": "ai-dashboard", "category": "planning", "status": "backlog",
+        "system": "ticket-service", "category": "planning", "status": "backlog",
         "priority": {"high": 1, "medium": 2, "low": 3}.get(draft["priority"].lower(), 2),
         "effort": "M", "tags": ["panther", "needs-triage", "no-auto"], "project": "Panther Intent Capture",
     }
@@ -307,7 +312,7 @@ def preview_ticket(recording: dict, ticket: dict) -> dict:
                                             sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
     with storage.DATA_LOCK:
         receipt = _load_receipt(target, seed)
-    return {"ok": True, "target": "ai-dashboard", "target_url": target, "payload": payload,
+    return {"ok": True, "target": "ticket-service", "target_url": target, "payload": payload,
             "seed_key": seed, "payload_hash": fingerprint, "warnings": warnings, "receipt": receipt}
 
 

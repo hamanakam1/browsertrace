@@ -148,9 +148,11 @@ async function refresh() {
     message(error.message + " — start backend/start.sh, then refresh.", true);
   }
   try {
-    const status = await api("integrations/ai-dashboard");
-    $("dashboardStatus").textContent = status.ok ? "AI Dashboard reachable · delivery verified when sent" : "AI Dashboard unavailable · JSON export still works";
-  } catch (_) { $("dashboardStatus").textContent = "AI Dashboard status unavailable"; }
+    const status = await api("integrations/ticket-service");
+    $("dashboardStatus").textContent = status.state === "unconfigured"
+      ? "Ticket delivery is not configured · capture and JSON export still work"
+      : status.ok ? "Ticket service reachable · delivery verified when sent" : "Ticket service unavailable · JSON export still works";
+  } catch (_) { $("dashboardStatus").textContent = "Ticket service status unavailable"; }
 }
 function renderLibrary() {
   $("count").textContent = recordings.length;
@@ -253,10 +255,10 @@ function renderTickets(data, recordingId = selected.id) {
       await api("tickets/" + recordingId + "/review", {ticket_id: ticket.id, patch: patch()});
       message("Draft edits saved locally.");
     }));
-    actions.append(button("Preview AI Dashboard ticket", async () => {
+    actions.append(button("Preview ticket delivery", async () => {
       const body = {ticket_id: ticket.id, patch: patch()};
       await api("tickets/" + recordingId + "/review", body);
-      const preview = await api("integrations/ai-dashboard/preview/" + recordingId, body);
+      const preview = await api("integrations/ticket-service/preview/" + recordingId, body);
       activePreview = {id: recordingId, body, preview};
       const summary = $("previewSummary");
       summary.replaceChildren(element("h3", preview.payload.title), element("p", body.patch.description));
@@ -297,13 +299,13 @@ $("confirmSend").addEventListener("click", async () => {
   $("deliveryStatus").textContent = "Sending and verifying the dashboard ticket…";
   try {
     const {id, body, preview} = activePreview;
-    const result = await api("integrations/ai-dashboard/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    const result = await api("integrations/ticket-service/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
     if (result.verified) {
       const verifiedAt = result.receipt?.verified_at;
       const when = Number.isFinite(verifiedAt) ? new Date(verifiedAt * 1000).toLocaleString() : "the recorded delivery time";
       $("deliveryStatus").textContent = result.previously_verified
-        ? "Previously verified in AI Dashboard: " + result.ticket_key + " at " + when + ". No duplicate sent; current ticket state has not been rechecked."
-        : "Verified in AI Dashboard: " + result.ticket_key + " at " + when + ". The ticket had its no-auto review fence at verification.";
+        ? "Previously verified at the destination: " + result.ticket_key + " at " + when + ". No duplicate sent; current ticket state has not been rechecked."
+        : "Verified at the destination: " + result.ticket_key + " at " + when + ". The ticket had its no-auto review fence at verification.";
     } else {
       $("deliveryStatus").textContent = "Submission state: " + result.state + ". Verification is still pending; retry uses the same capture identity.";
     }

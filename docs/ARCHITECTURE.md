@@ -29,17 +29,17 @@ The component sketch below preserves the earlier high-level overview, not the co
 │  ├── api/routes.py         - API endpoints                                  │
 │  ├── storage.py            - Local storage (~/.panther-intent-capture/)    │
 │  ├── automation.py         - Durable job queue for auto-delivery            │
-│  ├── integrations.py       - AI Dashboard adapter                           │
+│  ├── integrations.py       - Optional local ticket-service adapter         │
 │  ├── inference.py          - Ollama integration for AI generation           │
 │  ├── redaction.py          - Secret/credential redaction                    │
 │  └── tickets.py            - Intent decomposition to tickets                 │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │ HTTP
-                                    │ 127.0.0.1:7878
+                                    │ Explicitly configured loopback origin
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            AI Dashboard (External)                          │
-│                         MasterBoard API for ticket creation                 │
+│                         Compatible local ticket service                    │
+│                         Optional; no default destination                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ Both browser workflows require explicit **Turn Panther on** first. Turning On do
 3. **Stop**: User stops capture → events sent to backend
 4. **Draft Generation**: Backend creates draft from events + goal
 5. **Review**: User reviews/edits draft in options page
-6. **Delivery**: User previews and sends to AI Dashboard (with confirmation)
+6. **Delivery**: User previews and sends to local ticket service (with confirmation)
 7. **Verification**: Backend reads back ticket to verify creation
 
 ### Automated Workflow
@@ -113,7 +113,7 @@ Capture start/stop is controlled inside the extension, not through HTTP start/st
 - `GET /recordings` - List saved captures
 - `GET /tickets/:id` and `POST /tickets/:id` - Read or generate drafts for a capture
 - `POST /tickets/:id/review` - Save reviewed draft edits
-- `POST /integrations/ai-dashboard/preview/:id` and `POST /integrations/ai-dashboard/submit/:id` - Preview and confirm manual ticket delivery
+- `POST /integrations/ticket-service/preview/:id` and `POST /integrations/ticket-service/submit/:id` - Preview and confirm manual ticket delivery
 - `GET /automation/:id` and `POST /automation/:id` - Read job status or request a supported control action
 - `GET /export/:id` - Export the portable intent bundle
 

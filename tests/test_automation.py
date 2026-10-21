@@ -212,7 +212,7 @@ class AutomationTests(unittest.TestCase):
     def test_active_job_blocks_manual_generation_edit_and_send(self):
         rid = self.record()
         for path, body in ((f"tickets/{rid}", {}), (f"tickets/{rid}/review", {}),
-                           (f"integrations/ai-dashboard/submit/{rid}", {"confirmed": True})):
+                           (f"integrations/ticket-service/submit/{rid}", {"confirmed": True})):
             code, result = self.request(path, body)
             self.assertEqual(code, 409, result)
         self.assertEqual(self.dashboard.state["posts"], [])

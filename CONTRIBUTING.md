@@ -50,6 +50,8 @@ python3 scripts/package_extension.py
 
 ## Privacy-minded contributions
 
+Public source, documentation, issues, screenshots, and examples must not identify a contributor's private systems or deployments. Use generic adapter names and synthetic origins, ticket data, and fixtures. Keep installation paths, internal architecture, real operational screenshots, and deployment-specific evidence local. A public repository is not permission to publish the systems that integrate with it.
+
 Any feature that captures or stores user data must:
 - Be opt-in
 - Minimize captured data and filter common secrets; never describe screenshot pixels as redacted

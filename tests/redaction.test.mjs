@@ -15,6 +15,6 @@ test("capture allowlist excludes typed keys and input values", () => {
   assert.equal(out.key, undefined);
 });
 test("URLs retain dashboard routes and discard credentials and query", () => {
-  const out = sanitizeUrl("http://user:pass@127.0.0.1:7878/?token=secret#cockpit");
-  assert.equal(out, "http://127.0.0.1:7878/#cockpit");
+  const out = sanitizeUrl("http://user:pass@127.0.0.1:8080/?token=secret#cockpit");
+  assert.equal(out, "http://127.0.0.1:8080/#cockpit");
 });

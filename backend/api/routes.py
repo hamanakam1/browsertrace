@@ -325,7 +325,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
             return
         parts = path[len(prefix):].strip("/").split("/")
         if parts == ["health"] and method == "GET":
-            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": "1.0", "capabilities": ["events", "screenshots", "drafts", "json-export", "ai-dashboard", "automatic-delivery"]})
+            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": "1.0", "capabilities": ["events", "screenshots", "drafts", "json-export", "ticket-service", "automatic-delivery"]})
             return
         if parts == ["record"] and method == "POST":
             _record(handler)
@@ -333,7 +333,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
         if parts == ["recordings"] and method == "GET":
             _json(handler, 200, {"recordings": storage.list_recordings()})
             return
-        if parts == ["integrations", "ai-dashboard"] and method == "GET":
+        if parts == ["integrations", "ticket-service"] and method == "GET":
             _json(handler, 200, dashboard_status())
             return
         if len(parts) == 2 and parts[0] == "automation":
@@ -349,7 +349,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
             return
         if len(parts) == 2 and parts[0] == "recordings" and method == "DELETE":
             automation.control(parts[1], "cancel")
-        integration = len(parts) == 4 and parts[:2] == ["integrations", "ai-dashboard"] and parts[2] in ("preview", "submit")
+        integration = len(parts) == 4 and parts[:2] == ["integrations", "ticket-service"] and parts[2] in ("preview", "submit")
         if not integration and (len(parts) not in (2, 3) or parts[0] not in ("recordings", "tickets", "export", "infer")):
             _json(handler, 404, {"error": "not found"})
             return

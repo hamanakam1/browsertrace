@@ -25,7 +25,7 @@ function fixture() {
   const root = new Element("html");
   const context = vm.createContext({
     URL, Date, console,
-    location: { href: "http://127.0.0.1:7878/#master" },
+    location: { href: "http://127.0.0.1:8080/#master" },
     document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
     window: { addEventListener: (type, fn) => { windowListeners[type] = fn; } },
     setInterval: (fn, interval) => { timers.set(++nextTimer, { fn, interval }); return nextTimer; },
@@ -121,15 +121,15 @@ test("change capture never reads input values or typed keys and ignores editable
 
 test("hash and pushState-style route changes are captured once with private query removed", () => {
   const f = fixture(); f.start();
-  f.context.location.href = "http://127.0.0.1:7878/?token=secret#work-board";
+  f.context.location.href = "http://127.0.0.1:8080/?token=secret#work-board";
   f.windowListeners.hashchange();
-  assert.equal(f.events().at(-1).payload.url, "http://127.0.0.1:7878/#work-board");
+  assert.equal(f.events().at(-1).payload.url, "http://127.0.0.1:8080/#work-board");
   const count = f.events().length;
   f.tick(500);
   assert.equal(f.events().length, count);
-  f.context.location.href = "http://127.0.0.1:7878/settings?password=secret";
+  f.context.location.href = "http://127.0.0.1:8080/settings?password=secret";
   f.tick(500);
-  assert.equal(f.events().at(-1).payload.url, "http://127.0.0.1:7878/settings");
+  assert.equal(f.events().at(-1).payload.url, "http://127.0.0.1:8080/settings");
 });
 
 test("Stop disables event capture and Hide removes only controls without stopping capture", () => {

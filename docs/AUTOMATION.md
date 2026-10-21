@@ -4,7 +4,7 @@ Panther's scope ends at ticket creation and verified delivery. It does not imple
 
 ## Operator experience
 
-Explicitly turn Panther on from the popup first. Before starting a capture, separately enable automatic delivery to the exact AI Dashboard origin displayed in the popup. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
+Explicitly turn Panther on from the popup first. Before starting a capture, separately enable automatic delivery to the exact local ticket service origin displayed in the popup. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
 
 After Stop, the extension saves the capture and the backend automatically generates proposals, submits them to Dashboard, and reads each ticket back. The popup, floating controls, and review page show progress and verified counts. **Cancel remaining delivery** prevents further work but cannot retract an in-flight request or delete an existing Dashboard ticket. **Retry now** advances an eligible automatic retry; it does not renew authority or reset the budget.
 
@@ -19,7 +19,7 @@ Automatic output is an **unreviewed proposal**. Recorded actions are evidence of
   "automation": {
     "enabled": true,
     "consent": true,
-    "target_url": "http://127.0.0.1:7878",
+    "target_url": "http://127.0.0.1:8080",
     "use_ai": false,
     "max_tickets": 5
   }
@@ -57,6 +57,6 @@ Cancellation also works when an upload acknowledgment is lost or no recording ha
 
 ## Operating limits
 
-Keep Panther on until delivery completes. Use Stop & deliver for a normal session ending; Turn Panther off cancels remaining automatic delivery. The [on-demand browser helper](BROWSER_CONTROL.md) requires one-time registration, but Panther does not install a login service, start AI Dashboard, run around a Dashboard hold, or grant browser permissions itself. Automatic delivery currently targets the supported **local AI Dashboard** only; other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
+Keep Panther on until delivery completes. Use Stop & deliver for a normal session ending; Turn Panther off cancels remaining automatic delivery. The [on-demand browser helper](BROWSER_CONTROL.md) requires one-time registration, but Panther does not install a login service, start a destination service, bypass an execution hold, or grant browser permissions itself. Automatic delivery requires an explicitly configured service implementing the supported **local ticket-service protocol**; other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
 
 The loopback API's origin/header checks are not user authentication. This is a single-user local tool, not a network service. Do not expose its listener publicly.

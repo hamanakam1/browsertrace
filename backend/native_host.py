@@ -120,7 +120,7 @@ def load_config(path, origin):
     if not isinstance(directory, str) or not directory or not Path(directory).is_absolute():
         raise ValueError("Native capture directory must be absolute")
     result = dict(value, data_dir=str(Path(directory).resolve()),
-                  dashboard_url=_local_url(value.get("dashboard_url")))
+                  dashboard_url=_local_url(value["dashboard_url"]) if "dashboard_url" in value else "")
     if "ollama_endpoint" in value:
         result["ollama_endpoint"] = _local_url(value["ollama_endpoint"], inference=True)
     if "ollama_model" in value and (not isinstance(value["ollama_model"], str)

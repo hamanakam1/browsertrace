@@ -195,7 +195,7 @@ class IntegrationsTests(unittest.TestCase):
 
         class Request:
             command = "POST"
-            path = "/api/extension/integrations/ai-dashboard/submit/capture-123"
+            path = "/api/extension/integrations/ticket-service/submit/capture-123"
             def send_response(self, status):
                 self.status = status
             def send_header(self, *args):
@@ -290,8 +290,8 @@ class IntegrationsTests(unittest.TestCase):
 
     def test_nonloopback_and_ambiguous_destinations_fail_before_network(self):
         for target in ("https://example.com", "http://169.254.169.254", "http://127.0.0.1.evil.test", "file:///etc/passwd",
-                       "http://127.0.0.1:7878/path", "http://user:pass@127.0.0.1", "http://127.0.0.1?query=1",
-                       "http://[::ffff:192.168.1.1]:7878", "http://localhost#fragment"):
+                       "http://127.0.0.1:8080/path", "http://user:pass@127.0.0.1", "http://127.0.0.1?query=1",
+                       "http://[::ffff:192.168.1.1]:8080", "http://localhost#fragment"):
             with self.subTest(target=target), patch.dict(os.environ, {"PANTHER_DASHBOARD_URL": target}):
                 with self.assertRaises(ValueError):
                     integrations.preview_ticket(self.recording, self.ticket)
@@ -304,6 +304,17 @@ class IntegrationsTests(unittest.TestCase):
         self.assertEqual(result["state"], "reachable")
         self.assertNotIn("private_data", result)
         self.assertEqual(self.server.state["gets"], ["/healthz"])
+
+    def test_unconfigured_destination_never_contacts_a_service(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(integrations, "_request") as request:
+            status = integrations.dashboard_status()
+            self.assertEqual(status["state"], "unconfigured")
+            self.assertEqual(status["url"], "")
+            with self.assertRaisesRegex(ValueError, "Configure"):
+                integrations.preview_ticket(self.recording, self.ticket)
+            exported = integrations.export_bundle(self.recording, {"tickets": [self.ticket]})
+            self.assertTrue(exported["authority"]["export_only"])
+            request.assert_not_called()
 
     def test_unavailable_dashboard_preserves_uncertain_receipt(self):
         with patch.object(integrations, "_request", side_effect=TimeoutError("timeout")):

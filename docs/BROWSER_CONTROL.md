@@ -23,15 +23,17 @@ Optional setup parameters:
 | Parameter | Purpose |
 |---|---|
 | `--data-dir /absolute/private/path` | Saved captures, jobs, receipts, and helper configuration. Default: `~/.panther-intent-capture`. |
-| `--dashboard-url http://127.0.0.1:7878` | Pin the local Dashboard origin; loopback only. |
+| `--dashboard-url http://127.0.0.1:8080` | Pin a compatible local ticket-service origin; loopback only. This is an example. No destination is configured by default. |
 | `--ollama-endpoint http://127.0.0.1:11434/v1` | Optional local inference endpoint; HTTP loopback only. |
 | `--ollama-model MODEL_NAME` | Optional already-installed local model; no download or paid fallback. |
 
 The native host is named `com.panther.intent_capture`. Its manifest allows only the exact extension origin you supplied. Browser messages can request `start`, `status`, or `stop`; they cannot provide shell commands, executable paths, environment variables, or alternate destinations. The helper configuration and launcher are private to the current user. Registration refuses to replace a different or edited existing host registration.
 
+Without `--dashboard-url`, capture, draft review, and JSON export work, but ticket delivery is unconfigured. Existing registrations retain their explicitly stored origin. To change it, follow the supported uninstall/reinstall procedure; do not overwrite the private configuration or receipt.
+
 ## Everyday controls
 
-- **Turn Panther on** starts only Panther's local backend. It does not start AI Dashboard or Ollama and does not begin recording. Confirm capture consent and choose **Start capture** separately.
+- **Turn Panther on** starts only Panther's local backend. It does not start a ticket service or Ollama and does not begin recording. Confirm capture consent and choose **Start capture** separately.
 - **Stop & deliver tickets** ends a session and performs the explicitly opted-in capture-to-ticket workflow. Panther remains on so generation, delivery, and verification can finish.
 - **Turn Panther off** immediately stops accepting capture events and automatic browser upload retries, preserves an interrupted capture locally, cancels remaining automatic delivery, and shuts down the backend owned by that browser connection. A request already in flight can finish; already created tickets remain.
 - Quitting the browser process or losing the helper connection stops the browser-owned backend. Closing only a window may leave the browser running in background, so use **Turn Panther off** for an explicit shutdown. There is no automatic reconnect. The next explicit On cancels stale unfinished automatic jobs before starting the worker; it does not silently resume abandoned delivery.

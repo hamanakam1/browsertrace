@@ -226,7 +226,7 @@ class StorageTests(unittest.TestCase):
 
 
 class DraftTests(unittest.TestCase):
-    recording = {"id": "test-recording", "start_time": 1000, "url": "http://localhost:7878/?token=secret#work",
+    recording = {"id": "test-recording", "start_time": 1000, "url": "http://localhost:8080/?token=secret#work",
                  "goal": "Fix the Save button", "title": "Dashboard", "video_path": ""}
     events = [{"type": "click", "ts": 1001500, "target": {"tag": "button", "text": "Save"}}]
 
@@ -237,7 +237,7 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(result["mode"], "observed")
         self.assertIsNone(result["model"])
         self.assertEqual(draft["steps_to_reproduce"], ["click: Save"])
-        self.assertEqual(draft["provenance"]["source_url"], "http://localhost:7878/#work")
+        self.assertEqual(draft["provenance"]["source_url"], "http://localhost:8080/#work")
         self.assertEqual(draft["evidence_refs"][0]["event_index"], 1)
         self.assertTrue(draft["requires_review"])
         self.assertFalse(draft["execution_authorized"])

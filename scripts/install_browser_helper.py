@@ -66,7 +66,7 @@ def _no_symlinks(path):
             raise ValueError(f"Refusing a symlink in the installation path: {entry}")
 
 
-def plan_install(*, browser, extension_id, data_dir, dashboard_url="http://127.0.0.1:7878",
+def plan_install(*, browser, extension_id, data_dir, dashboard_url=None,
                  user_data_dir=None, ollama_endpoint=None, ollama_model=None,
                  home=None, platform=None, root=ROOT, python=None):
     platform = platform or sys.platform
@@ -88,8 +88,9 @@ def plan_install(*, browser, extension_id, data_dir, dashboard_url="http://127.0
     launcher = helper_dir / "launch.sh"
     manifest = user_data_dir / "NativeMessagingHosts" / (HOST_NAME + ".json")
     origin = f"chrome-extension://{extension_id}/"
-    config = {"version": 1, "allowed_origin": origin, "data_dir": str(data_dir),
-              "dashboard_url": local_url(dashboard_url)}
+    config = {"version": 1, "allowed_origin": origin, "data_dir": str(data_dir)}
+    if dashboard_url is not None:
+        config["dashboard_url"] = local_url(dashboard_url)
     if ollama_endpoint is not None:
         config["ollama_endpoint"] = local_url(ollama_endpoint, inference=True)
     if ollama_model is not None:
@@ -173,7 +174,7 @@ def main():
     parser.add_argument("--extension-id", required=True, help="Copy the ID from the browser's extensions page")
     parser.add_argument("--data-dir", type=Path, default=Path.home() / ".panther-intent-capture")
     parser.add_argument("--user-data-dir", type=Path, help="Explicit custom browser user-data directory, not its Default subfolder")
-    parser.add_argument("--dashboard-url", default="http://127.0.0.1:7878")
+    parser.add_argument("--dashboard-url", help="Optional explicit loopback ticket-service origin; no default destination")
     parser.add_argument("--ollama-endpoint")
     parser.add_argument("--ollama-model")
     parser.add_argument("--uninstall", action="store_true", help="Remove unchanged helper registration, not saved captures")

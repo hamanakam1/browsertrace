@@ -98,11 +98,11 @@ class NativeProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "native.json"
             config = {"version": 1, "allowed_origin": ORIGIN, "data_dir": directory,
-                      "dashboard_url": "http://localhost:7878", "ollama_endpoint": "http://127.0.0.1:11434/v1",
+                      "dashboard_url": "http://localhost:8080", "ollama_endpoint": "http://127.0.0.1:11434/v1",
                       "ollama_model": "local-test"}
             storage.write_json(path, config)
             loaded = native_host.load_config(path, ORIGIN)
-            self.assertEqual(loaded["dashboard_url"], "http://127.0.0.1:7878")
+            self.assertEqual(loaded["dashboard_url"], "http://127.0.0.1:8080")
             for changes, origin in (({}, ORIGIN.replace("a", "b")), ({"version": True}, ORIGIN),
                                     ({"dashboard_url": "https://remote.example"}, ORIGIN),
                                     ({"ollama_endpoint": "http://user:secret@localhost:11434/v1"}, ORIGIN),
@@ -114,6 +114,15 @@ class NativeProtocolTests(unittest.TestCase):
             path.chmod(0o644)
             with self.assertRaises(ValueError):
                 native_host.load_config(path, ORIGIN)
+
+    def test_capture_only_config_does_not_inherit_a_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "native.json"
+            storage.write_json(path, {"version": 1, "allowed_origin": ORIGIN, "data_dir": directory})
+            loaded = native_host.load_config(path, ORIGIN)
+            self.assertEqual(loaded["dashboard_url"], "")
+            with patch.dict(os.environ, {"PANTHER_DASHBOARD_URL": "http://localhost:8080"}):
+                self.assertEqual(native_host.BackendOwner(loaded)._environment()["PANTHER_DASHBOARD_URL"], "")
 
     def test_force_stop_targets_only_owned_child_and_confirms_exit(self):
         class Child:
@@ -254,6 +263,32 @@ class NativeLifecycleTests(unittest.TestCase):
             headers={"Content-Type": "application/json", "X-Panther-Client": "test"})
         with urllib.request.urlopen(req, timeout=3) as response:
             return json.loads(response.read())["id"]
+
+    def test_capture_without_destination_starts_and_stays_local(self):
+        self.owner.config = {**self.config, "dashboard_url": ""}
+        self.assertEqual(self.owner.start()["state"], "on")
+        origin = f"http://127.0.0.1:{self.port}/api/extension"
+        with urllib.request.urlopen(origin + "/integrations/ticket-service", timeout=3) as response:
+            status = json.loads(response.read())
+        self.assertEqual(status["state"], "unconfigured")
+        self.assertEqual(status["url"], "")
+        start = time.time() - 1
+        body = {"consent": True, "extensionId": "test", "sessionId": "capture-only",
+                "startTime": start * 1000, "endTime": time.time() * 1000,
+                "events": [{"type": "click", "target": {"tag": "button", "label": "Example"}}]}
+        request = urllib.request.Request(origin + "/record", data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "X-Panther-Client": "test"})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            rid = json.loads(response.read())["id"]
+        request = urllib.request.Request(origin + "/tickets/" + rid, data=b'{"use_ai":false}',
+            headers={"Content-Type": "application/json", "X-Panther-Client": "test"})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            self.assertEqual(json.loads(response.read())["mode"], "observed")
+        with urllib.request.urlopen(origin + "/export/" + rid, timeout=3) as response:
+            exported = json.loads(response.read())
+        self.assertTrue(exported["authority"]["export_only"])
+        self.assertFalse(exported["authority"]["execution_authorized"])
+        self.assertEqual(self.fake.state["posts"], [])
 
     def test_explicit_start_status_stop_own_only_their_child(self):
         self.assertEqual(self.owner.status(), {"ok": True, "state": "off"})

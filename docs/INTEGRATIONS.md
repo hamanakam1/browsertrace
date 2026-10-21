@@ -1,6 +1,6 @@
 # Integration contracts
 
-Panther separates browser capture and draft review from destination delivery. AI Dashboard is the current built-in destination. A versioned JSON intent bundle is the integration point for other systems; there is no universal API adapter or native application capture in this release.
+Panther separates browser capture and draft review from destination delivery. The built-in adapter supports the specific local ticket-service protocol below, not an arbitrary ticket system. A versioned JSON intent bundle is the integration point for other systems; there is no universal API adapter or native application capture in this release.
 
 ## Portable intent bundle
 
@@ -79,9 +79,13 @@ There is no automatic bundle migration or importer in this release. Any future m
 
 Schema regressions validate real observed-mode exports and real generator/exporter output with a mocked AI response. Install the test-only `jsonschema==4.26.0` dependency to run the full validator suite; it is not needed by the backend at runtime. CI installs it explicitly. Tests report validator skips, rather than passing structural checks off as JSON Schema validation, when it is unavailable locally.
 
-## AI Dashboard adapter
+## Local ticket service adapter
 
-The default target is `http://127.0.0.1:7878`. Set `PANTHER_DASHBOARD_URL` before backend startup to use a different loopback HTTP(S) origin. Paths, query strings, credentials, non-loopback hosts, and redirects are rejected. `localhost` is canonicalized to `127.0.0.1`, and environment HTTP proxies are disabled for adapter requests.
+There is no default target. Set `PANTHER_DASHBOARD_URL` before backend startup or use `--dashboard-url` during browser-helper setup to pin a compatible loopback HTTP(S) origin. `http://127.0.0.1:8080` is a synthetic example, not a detected service. Without configuration, status reports `unconfigured` and delivery is unavailable; capture and JSON export still work. Paths, query strings, credentials, non-loopback hosts, and redirects are rejected. `localhost` is canonicalized to `127.0.0.1`, and environment HTTP proxies are disabled for adapter requests.
+
+### Updating an existing installation
+
+The public integration identifier and HTTP route prefix are now `ticket-service` and `/api/extension/integrations/ticket-service`. Update the backend and extension together, reload the unpacked extension, and update custom clients to use the documented routes. Existing explicit `dashboard_url` helper settings and `PANTHER_DASHBOARD_URL` values remain supported; the project does not modify installed configuration. The generic outbound `system` value is now `ticket-service`. Changed payloads require a fresh preview; existing receipt hash conflicts remain fail-closed and must be reconciled, never deleted to bypass review.
 
 The backend calls these existing dashboard routes:
 
@@ -139,9 +143,9 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 | `GET /export/<id>` | Export the portable JSON bundle. |
 | `GET /automation/<id>` | Inspect automatic job status, stage, counts, retry timing, and delivery receipts; manual captures return `disabled`. |
 | `POST /automation/<id>` | `{ "action": "cancel" }` stops remaining delivery; `{ "action": "retry" }` advances an eligible retry without resetting its budget or expiry. |
-| `GET /integrations/ai-dashboard` | Check dashboard health-route reachability. |
-| `POST /integrations/ai-dashboard/preview/<id>` | Build the exact dashboard payload without contacting it. |
-| `POST /integrations/ai-dashboard/submit/<id>` | Submit one confirmed, previewed draft and verify it. |
+| `GET /integrations/ticket-service` | Check dashboard health-route reachability. |
+| `POST /integrations/ticket-service/preview/<id>` | Build the exact dashboard payload without contacting it. |
+| `POST /integrations/ticket-service/submit/<id>` | Submit one confirmed, previewed draft and verify it. |
 
 POST and DELETE requests require an `X-Panther-Client` header. JSON POST requests use `Content-Type: application/json`. Browser requests must come from a permitted extension origin or the backend's loopback origin; unrelated website origins are refused. This header is not a secret or authentication token. The API is intended for a single-user local environment.
 

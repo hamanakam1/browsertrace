@@ -1,6 +1,6 @@
 # Panther Intent Capture roadmap
 
-The product goal is to make a user's observed workflow and desired change understandable to another system, with AI Dashboard as the first destination. Capture, interpretation, human review, delivery, and execution remain distinct steps.
+The product goal is to make a user's observed workflow and desired change understandable to another system through portable exports and explicitly configured adapters. Capture, interpretation, human review, delivery, and execution remain distinct steps.
 
 ## Implemented in the current source
 
@@ -16,20 +16,20 @@ The product goal is to make a user's observed workflow and desired change unders
 - Review UI with editable title, description, and acceptance criteria.
 - Destination-neutral, versioned JSON export with evidence references.
 - Formal Draft 2020-12 intent-bundle schema, positive/negative validation tests, and explicit version-migration policy.
-- AI Dashboard preview and confirmed single-draft submission, deterministic identity, durable delivery receipts, and independent readback.
+- Local ticket-service preview and confirmed single-draft submission, deterministic identity, durable delivery receipts, and independent readback.
 - Separately consented automatic capture-to-ticket delivery: frozen destination and proposals, a five-ticket session cap, 24-hour expiry, bounded retries, durable restart recovery, visible progress, and cancellation.
 - Backlog and `no-auto` fences on dashboard submissions; no execution authorization.
 - Synthetic browser-controller, HTTP, storage, inference, and delivery contract tests.
 
 These are implementation claims. Synthetic tests are not evidence of loaded-extension acceptance, live model quality, live dashboard delivery, or cross-site compatibility.
 
-The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately records a loaded-Chromium capture/recovery test and one consented synthetic-page capture delivered to a live AI Dashboard. It does not establish real-world Dashboard-page capture quality or broad site compatibility.
+The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately records a loaded-Chromium capture/recovery test against a synthetic destination. It does not establish a user's live destination compatibility or broad site coverage.
 
 ## Next: qualify the complete user workflow
 
 - Exercise the unpacked extension in fresh Chrome and Edge profiles, including same-origin reloads, SPA routes, tab changes, service-worker suspension, and browser restart.
 - Verify the popup and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
-- Run consented AI Dashboard captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
+- Run consented local ticket service captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
 - Measure draft usefulness with representative examples: accurate evidence, clear expected behavior, useful acceptance criteria, and minimal manual correction.
 - Test an explicitly configured local model and report model/version, errors, latency, and whether any media was analyzed.
 - Establish a small, published compatibility matrix from actual website/browser checks.
@@ -37,7 +37,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 ## Next: make integrations easier to extend
 
 - Add destination adapters behind the same preview, confirmation, idempotency, and delivery-receipt contract.
-- Prioritize a GitHub issue adapter and a configurable local importer after the AI Dashboard workflow is qualified.
+- Prioritize a GitHub issue adapter and a configurable local importer after the local ticket service workflow is qualified.
 - Add destination setup and capability discovery without exposing credentials to captured pages.
 - Provide deliberate update/link-existing workflows; resubmitting edited content must not silently overwrite an existing ticket.
 - Improve evidence transfer and attachments with separate consent, access control, and clear retention behavior.

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 const script = (await readFile(new URL("../extension/popup/popup.js", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function fixture(initial, target = "http://127.0.0.1:7878") {
+function fixture(initial, target = "http://127.0.0.1:8080") {
   const withPower = value => Object.hasOwn(value, "power") ? value : {...value, power: {state: "on", error: "", configured: true}};
   let state = withPower(initial);
   let interval;
@@ -138,7 +138,7 @@ test("screenshot warnings remain visible independently of a successful save or g
   assert.equal(f.elements.warning.textContent, state.session.warning);
 });
 
-const policy = { enabled: true, consent: true, target_url: "http://127.0.0.1:7878", use_ai: false, max_tickets: 5 };
+const policy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 const automatic = (status = "queued") => ({ ok: true, enabled: true, status: "automation", session: null,
   result: { id: "rec", eventCount: 3, automationPolicy: { ...policy }, automationCheckedAt: 1700000000000,
     automation: { status, stage: "delivery", ticket_count: 2, delivered_count: 1 }, error: "" } });
@@ -149,7 +149,7 @@ test("automatic delivery and local AI are unchecked per-session opt-ins with exa
   assert.equal(f.elements.automation.checked, false);
   assert.equal(f.elements.automationAI.checked, false);
   assert.equal(f.elements.automationAI.disabled, true);
-  assert.match(f.elements.automationTarget.textContent, /http:\/\/127.0.0.1:7878/);
+  assert.match(f.elements.automationTarget.textContent, /http:\/\/127.0.0.1:8080/);
   await f.click("recordBtn");
   assert.equal(f.calls.find((call) => call.type === "extension.startRecording").automation, undefined);
   f.elements.automation.checked = true;
@@ -175,7 +175,7 @@ test("previous terminal delivery retains its receipt target while new consent sh
   await flush();
   assert.match(f.elements.automationTarget.textContent, /127.0.0.1:9999/);
   assert.doesNotMatch(f.elements.automationTarget.textContent, /fixed for this session/);
-  assert.match(f.elements.meta.textContent, /127.0.0.1:7878/);
+  assert.match(f.elements.meta.textContent, /127.0.0.1:8080/);
   assert.equal(f.elements.recordBtn.hidden, false);
   f.elements.automation.checked = true; f.elements.automation.listeners.change();
   await f.click("recordBtn");
@@ -188,7 +188,7 @@ test("active session policy stays frozen and Stop advertises delivery; completio
   assert.equal(f.elements.automation.checked, true);
   assert.equal(f.elements.automation.disabled, true);
   assert.equal(f.elements.automationAI.checked, true);
-  assert.match(f.elements.automationTarget.textContent, /127.0.0.1:7878.*fixed/);
+  assert.match(f.elements.automationTarget.textContent, /127.0.0.1:8080.*fixed/);
   assert.equal(f.elements.stopBtn.textContent, "Stop & deliver tickets");
   assert.equal(f.elements.cancelAutomationBtn.hidden, false);
   f.state(automatic()); await flush();
