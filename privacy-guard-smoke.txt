@@ -1,2 +1,2 @@
 Synthetic CI test only. Never merge this fixture.
-privacy-fixture-violet-7a81e6c4
+Ordinary public fixture content.
