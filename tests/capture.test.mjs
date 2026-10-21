@@ -15,6 +15,7 @@ function fixture(options = {}) {
   const calls = { inject: [], messages: [], captures: [], fetch: [], badges: [], tabs: [] };
   const activeTab = { id: 7, windowId: 42, url: "https://app.test/dashboard?token=private#work-board", title: "Dashboard" };
   let timestamp = 1700000000000;
+  let powerOn = options.powerOn !== false;
   const api = {
     alarms: { get: async (name) => alarms.get(name), create: async (name, value) => alarms.set(name, clone(value)), clear: async (name) => alarms.delete(name) },
     runtime: { id: control.id, getURL: (path) => `chrome-extension://${control.id}/${path}`, getManifest: () => ({ name: "Panther" }) },
@@ -37,7 +38,7 @@ function fixture(options = {}) {
   };
   let fetchBehavior = options.fetch || (async (url) => ({ ok: true, json: async () => url.endsWith("/record") ? { id: "record-1" } : { tickets: [{ title: "Review observed intent" }] } }));
   const fetcher = async (url, init) => { calls.fetch.push({ url, init }); return fetchBehavior(url, init); };
-  const makeController = () => createCaptureController(api, fetcher, () => timestamp++);
+  const makeController = () => createCaptureController(api, fetcher, () => timestamp++, { isPowered: () => powerOn });
   let controller = makeController();
   return {
     api, data, sessionData, calls, activeTab, alarms,
@@ -45,6 +46,8 @@ function fixture(options = {}) {
     restartWorker() { controller = makeController(); return controller; },
     setFetch(fn) { fetchBehavior = fn; },
     advance(ms) { timestamp += ms; },
+    async turnOff() { powerOn = false; return controller.freeze("Panther is Off; accepted requests are unconfirmed."); },
+    turnOn() { powerOn = true; controller.unlock(); },
     send(type, values = {}, sender = control) { return controller.message({ type, ...values }, sender); },
     start(values = {}) { return this.send("extension.startRecording", { tabId: 7, consent: true, ...values }); },
     event(values = {}, sender = page) { return this.send("page.interaction", { sessionId: data[SESSION_KEY]?.sessionId, payload: { type: "click", url: activeTab.url, target: { tag: "button", label: "Save" }, ...values } }, sender); }
@@ -54,8 +57,8 @@ function fixture(options = {}) {
 test("all manifests are valid and Chromium permissions are scoped to an invoked tab", async () => {
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
-    assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms"]);
-    assert.equal(manifest.version, "1.2.0");
+    assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
+    assert.equal(manifest.version, "1.3.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -591,4 +594,132 @@ test("unverified policy, authority, expiry, or receipt counts never replace the 
     assert.match(f.data[RESULT_KEY].error, /unverified delivery status/);
   }
   assert.equal(f.calls.fetch.some((call) => call.url.includes("/tickets/")), false);
+});
+
+test("power defaults Off, clears old consent, and rejects mutation and backend discovery without activating anything", async () => {
+  const f = fixture({ powerOn: false });
+  assert.equal((await f.send("extension.getStatus")).enabled, false);
+  for (const [type, values] of [["extension.startRecording", { tabId: 7, consent: true }], ["extension.setEnabled", { enabled: true }], ["extension.getAutomationTarget", {}], ["extension.retryUpload", {}], ["extension.retryGeneration", {}], ["extension.discardCapture", {}]]) {
+    await assert.rejects(f.send(type, values), /Panther is Off/);
+  }
+  await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.calls.fetch.length, 0);
+  assert.equal(f.calls.inject.length, 0);
+  assert.equal(f.alarms.size, 0);
+  // The controller itself fails closed even if a caller omits the lifecycle dependency.
+  const direct = createCaptureController(f.api, async () => { throw new Error("Should not fetch"); });
+  await assert.rejects(direct.message({ type: "extension.setEnabled", enabled: true }, control), /Panther is Off/);
+});
+
+test("Off freezes active capture without upload, retains events, clears consent and ignores page writes", async () => {
+  const f = fixture(); await f.start(); await f.event();
+  const id = f.data[SESSION_KEY].sessionId;
+  await f.turnOff();
+  assert.equal(f.data[SESSION_KEY].status, "pending");
+  assert.equal(f.data[SESSION_KEY].sessionId, id);
+  assert.equal(f.data[SESSION_KEY].events.length, 1);
+  assert.equal(f.data[SESSION_KEY].powerPaused, true);
+  assert.equal(f.data[SETTINGS_KEY].enabled, false);
+  assert.equal(f.data[SESSION_KEY].nextUploadRetryAt, null);
+  assert.equal(f.calls.fetch.length, 0);
+  assert.equal((await f.event()).ignored, true);
+  assert.equal((await f.send("page.stop", { sessionId: id }, page)).ignored, true);
+  assert.equal((await f.send("page.getStatus", {}, page)).status, "pending");
+  await f.controller.tabUpdated(7, { status: "complete" }, f.activeTab);
+  assert.equal(f.calls.inject.length, 1);
+  f.turnOn(); await f.send("extension.getStatus");
+  await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.calls.fetch.length, 0);
+  await assert.rejects(f.send("extension.retryUpload"), /fresh capture consent/);
+  await f.send("extension.setEnabled", { enabled: true });
+  assert.equal((await f.send("extension.retryUpload")).status, "ready");
+});
+
+test("Off aborts an in-flight upload promptly and late completion cannot trigger generation", async () => {
+  let resolveUpload;
+  const f = fixture({ fetch: async () => new Promise((resolve) => { resolveUpload = resolve; }) });
+  await f.start(); await f.event();
+  const stopping = f.send("extension.stopRecording");
+  while (!resolveUpload) await new Promise((resolve) => setImmediate(resolve));
+  const signal = f.calls.fetch[0].init.signal;
+  await f.turnOff(); await stopping;
+  assert.equal(signal.aborted, true);
+  assert.equal(f.data[SESSION_KEY].status, "pending");
+  assert.equal(f.data[SESSION_KEY].events.length, 1);
+  assert.equal(f.calls.fetch.length, 1);
+  resolveUpload({ ok: true, json: async () => ({ id: "late-receipt" }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.calls.fetch.length, 1);
+  assert.equal(f.data[RESULT_KEY], undefined);
+});
+
+test("Off also aborts a stalled JSON response body rather than waiting for it to finish", async () => {
+  let resolveBody;
+  const f = fixture({ fetch: async () => ({ ok: true, json: () => new Promise((resolve) => { resolveBody = resolve; }) }) });
+  await f.start();
+  const stopping = f.send("extension.stopRecording");
+  while (!resolveBody) await new Promise((resolve) => setImmediate(resolve));
+  await f.turnOff(); await stopping;
+  assert.equal(f.data[SESSION_KEY].status, "pending");
+  resolveBody({ id: "late-body-receipt" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.calls.fetch.length, 1);
+  assert.equal(f.data[RESULT_KEY], undefined);
+});
+
+test("Off aborts generation without claiming its already submitted backend work was undone", async () => {
+  let resolveGeneration;
+  const f = fixture({ fetch: async (url) => url.endsWith("/record") ? { ok: true, json: async () => ({ id: "saved" }) } : new Promise((resolve) => { resolveGeneration = resolve; }) });
+  await f.start();
+  const stopping = f.send("extension.stopRecording");
+  while (!resolveGeneration) await new Promise((resolve) => setImmediate(resolve));
+  await f.turnOff(); await stopping;
+  assert.equal(f.data[RESULT_KEY].id, "saved");
+  assert.equal(f.data[RESULT_KEY].status, "error");
+  assert.equal(f.data[RESULT_KEY].powerPaused, true);
+  assert.match(f.data[RESULT_KEY].error, /interrupted|unconfirmed/);
+  resolveGeneration({ ok: true, json: async () => ({ tickets: [{ title: "late draft" }] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.data[RESULT_KEY].status, "error");
+  assert.equal(f.calls.fetch.length, 2);
+});
+
+test("Off clears automatic upload wakeups and explicit On cannot silently resume them", async () => {
+  const f = automaticFixture(); f.transport.failUpload = true;
+  await f.startAutomatic(); await f.send("extension.stopRecording");
+  const before = f.calls.fetch.length;
+  assert.equal(f.alarms.has(AUTOMATION_ALARM), true);
+  await f.turnOff();
+  assert.equal(f.alarms.size, 0);
+  f.turnOn(); f.advance(600001);
+  await f.send("extension.getStatus"); await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.calls.fetch.length, before);
+  assert.equal(f.data[SESSION_KEY].nextUploadRetryAt, null);
+  await assert.rejects(f.send("extension.retryUpload"), /fresh capture consent/);
+});
+
+test("saved automatic jobs stay locally paused across Off/On until explicit status or action", async () => {
+  const f = automaticFixture(); await f.startAutomatic(); await f.send("extension.stopRecording");
+  await f.turnOff(); const before = f.calls.fetch.length;
+  assert.equal(f.data[RESULT_KEY].powerPaused, true);
+  f.turnOn(); f.advance(600001);
+  await f.send("extension.getStatus"); await f.controller.alarm(AUTOMATION_ALARM);
+  assert.equal(f.calls.fetch.length, before);
+  await f.send("extension.refreshAutomation");
+  assert.equal(f.calls.fetch.length, before + 1);
+  assert.equal(f.calls.fetch.at(-1).init.method, undefined);
+  assert.equal(f.data[RESULT_KEY].powerPaused, true);
+});
+
+test("Off during destination discovery prevents later injection and capture creation", async () => {
+  let resolveTarget;
+  const f = fixture({ fetch: () => new Promise((resolve) => { resolveTarget = resolve; }) });
+  const starting = f.start({ automation: automaticPolicy });
+  const rejected = assert.rejects(starting, /interrupted|Off/);
+  while (!resolveTarget) await new Promise((resolve) => setImmediate(resolve));
+  await f.turnOff(); await rejected;
+  resolveTarget({ ok: true, json: async () => ({ url: automaticPolicy.target_url }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.calls.inject.length, 0);
+  assert.equal(f.data[SESSION_KEY], undefined);
 });

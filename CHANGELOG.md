@@ -25,6 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [1.3.0] - 2026-10-21
+
+### Added
+- Explicit browser On / Off controls with an on-demand native helper for Chrome and Edge on macOS/Linux.
+- Scoped helper installation and uninstall, exact extension-origin registration, and private configuration.
+- Lifecycle regression tests and an isolated real-browser verification report in `docs/BROWSER_CONTROL_TEST_RESULTS.md`.
+
+### Changed
+- Off preserves captured evidence, clears capture consent, cancels unfinished automatic ticket delivery, and stops only the browser-owned backend.
+- Reopening the popup or browser does not start Panther; turning On again does not resume recording or abandoned delivery.
+- Normal Stop & deliver keeps Panther on while the opted-in ticket workflow finishes. Panther creates tickets but does not execute their work.
+
+### Fixed
+- Shutdown proceeds even while browser storage is stalled, without hiding persistence uncertainty.
+- Ordinary status polling detects a dead owned backend without reconnecting automatically.
+- Final delivery checks prevent a new destination request when authority is revoked after receipt persistence.
+
+### Security
+- Native commands cannot supply executable paths, shell commands, environment variables, or alternate destinations.
+- No login service, HTTP shutdown endpoint, automatic reconnect, or adoption of another process was added.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added

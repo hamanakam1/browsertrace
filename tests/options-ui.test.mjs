@@ -50,7 +50,7 @@ const drafts = id => ({mode: "observed", tickets: [{id: "draft-" + id, title: "R
 const job = (status, extras = {}) => ({status, target_url: "http://127.0.0.1:7878",
   ticket_count: 1, delivered_count: 0, attempts: 1, deliveries: [], ...extras});
 
-function fixture({initialJob = job("disabled"), initialStatus, screenshots = false} = {}) {
+function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower} = {}) {
   const elements = new Map(), responses = new Map(), calls = [], timers = new Map();
   let nextTimer = 0;
   const document = {
@@ -75,7 +75,11 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
   if (initialStatus) respond("GET", "automation/a", initialStatus);
   const context = vm.createContext({
     BACKEND_ORIGIN: "http://127.0.0.1:7890", document, console, Date, URL, Blob, AbortSignal,
-    location: {protocol: "http:", origin: "http://127.0.0.1:7890", href: "http://127.0.0.1:7890/?recording=a"},
+    location: {protocol: browserPower ? "chrome-extension:" : "http:", origin: "http://127.0.0.1:7890", href: "http://127.0.0.1:7890/?recording=a"},
+    chrome: {runtime: {sendMessage: async (message) => {
+      assert.equal(message.type, "extension.getPowerState");
+      return browserPower();
+    }}},
     history: {replaceState() {}}, confirm: () => true,
     setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -114,6 +118,27 @@ test("actual review UI locks all draft controls until automation status is known
   status.resolve(job("disabled")); await f.ready;
   assert.equal(f.get("automationPanel").hidden, true);
   assert.ok(f.fields().every(field => !field.disabled));
+});
+
+test("extension review page does not contact any backend while Panther is off", async () => {
+  const f = fixture({browserPower: () => ({ok: true, power: {state: "off"}})});
+  await f.ready;
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.get("generate").disabled, true);
+  assert.match(f.get("message").textContent, /Panther is off/);
+});
+
+test("turning Panther off fences an already-open extension review page before the next mutation", async () => {
+  let state = "on";
+  const f = fixture({browserPower: () => ({ok: true, power: {state}})});
+  await f.ready;
+  assert.ok(f.calls.length > 0);
+  const count = f.calls.length;
+  state = "off";
+  await f.get("generate").click();
+  assert.equal(f.calls.length, count);
+  assert.equal(f.get("generate").disabled, true);
+  assert.match(f.get("message").textContent, /Panther is off/);
 });
 
 test("status failures preserve a stale label and lock actual review controls", async () => {

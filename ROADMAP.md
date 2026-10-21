@@ -6,6 +6,7 @@ The product goal is to make a user's observed workflow and desired change unders
 
 - Explicit chosen-tab capture for Chrome/Edge 116+ on ordinary HTTP(S) pages.
 - Events-first capture with a floating status/control panel and popup recovery actions.
+- Explicit browser On / Off with a native helper on macOS/Linux; no login service or automatic reconnect. Off cancels unfinished delivery and stops only the owned backend.
 - Allowlisted control metadata; no typed values or keystrokes; URL and common-secret sanitization.
 - Separately consented screenshots, bounded to five per session. Pixels remain unredacted.
 - Durable browser capture state, idempotent backend upload, interrupted-upload recovery, and separate draft-generation retry.
@@ -47,7 +48,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 - Add redaction review and screenshot masking before storage or export.
 - Provide explicit receipt/history retention controls while explaining their effect on duplicate prevention.
 - Improve large-session coverage, event truncation disclosure, and cross-frame capture with explicit permission boundaries.
-- Package startup/service installation only after testing lifecycle, path configuration, upgrades, and uninstall behavior.
+- Qualify native-helper packaging across platforms, upgrades, custom profiles, and uninstall behavior while retaining explicit browser startup. Windows helper packaging remains unimplemented.
 
 ## Deferred capabilities
 

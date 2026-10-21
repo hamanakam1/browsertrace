@@ -67,6 +67,7 @@ def _parse_body(handler):
     body = handler.rfile.read(length)
     if len(body) != length:
         raise ValueError("Incomplete request body")
+    automation.require_browser_active()
     return body
 
 
@@ -192,6 +193,7 @@ def _record(handler):
     goal = _text(data.get("goal", ""), 2000)
     policy = automation.admit_policy(data.get("automation"), start)
     with storage.DATA_LOCK:
+        automation.require_browser_active()
         rid = storage.recording_id_for_session(extension_id, session_id)
         automation.require_not_cancelled(rid)
         existing = storage.get_recording(rid)
@@ -290,6 +292,12 @@ def _serve_ui(handler, path):
 
 def handle_request(handler: BaseHTTPRequestHandler):
     try:
+        try:
+            automation.require_browser_active()
+        except ValueError as exc:
+            handler.close_connection = True
+            _json(handler, 503, {"error": str(exc)})
+            return
         host = urlsplit("http://" + handler.headers.get("Host", "")).hostname
         if host not in ("127.0.0.1", "localhost", "::1"):
             _json(handler, 403, {"error": "Loopback Host required"})

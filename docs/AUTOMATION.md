@@ -4,7 +4,7 @@ Panther's scope ends at ticket creation and verified delivery. It does not imple
 
 ## Operator experience
 
-Before starting a capture, separately enable automatic delivery to the exact AI Dashboard origin displayed in the popup. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
+Explicitly turn Panther on from the popup first. Before starting a capture, separately enable automatic delivery to the exact AI Dashboard origin displayed in the popup. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
 
 After Stop, the extension saves the capture and the backend automatically generates proposals, submits them to Dashboard, and reads each ticket back. The popup, floating controls, and review page show progress and verified counts. **Cancel remaining delivery** prevents further work but cannot retract an in-flight request or delete an existing Dashboard ticket. **Retry now** advances an eligible automatic retry; it does not renew authority or reset the budget.
 
@@ -34,6 +34,8 @@ Generated proposals are frozen before any submission. If their count exceeds the
 
 Jobs are private, atomic JSON records in `PANTHER_DATA_DIR/automation/`. The backend owns one delivery worker and recovers unfinished admitted jobs on startup. It does not need the popup to stay open. An initial missing job can be recreated only from a recording's previously persisted explicit policy. If processing already began, a missing job instead becomes blocked: uncertain history cannot authorize regeneration or reset the attempt budget. The backend never infers consent from a draft or from the mere existence of a recording.
 
+**Browser power is a stricter boundary:** Turn Panther off, quitting the browser process, or loss of the native helper connection cancels unfinished automatic work and closes the browser-owned backend. Closing only a window may not quit the browser. The next explicit On also cancels stale prior jobs before starting the worker; it does not resume abandoned jobs after a crash. The recovery rules above apply within an authorized running backend/developer lifecycle, never as an instruction to turn the browser helper on automatically.
+
 | Job state | Meaning |
 |---|---|
 | `queued` | Saved and admitted; waiting for the worker. |
@@ -55,6 +57,6 @@ Cancellation also works when an upload acknowledgment is lost or no recording ha
 
 ## Operating limits
 
-Keep the backend running, or restart it to recover queued jobs before expiry. Panther does not install a login service, start AI Dashboard, run around a Dashboard hold, or grant browser permissions itself. Automatic delivery currently targets the supported **local AI Dashboard** only; other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
+Keep Panther on until delivery completes. Use Stop & deliver for a normal session ending; Turn Panther off cancels remaining automatic delivery. The [on-demand browser helper](BROWSER_CONTROL.md) requires one-time registration, but Panther does not install a login service, start AI Dashboard, run around a Dashboard hold, or grant browser permissions itself. Automatic delivery currently targets the supported **local AI Dashboard** only; other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
 
 The loopback API's origin/header checks are not user authentication. This is a single-user local tool, not a network service. Do not expose its listener publicly.

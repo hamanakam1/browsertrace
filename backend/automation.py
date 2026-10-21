@@ -26,6 +26,9 @@ ACTIVE = {"queued", "generating", "delivering", "retry_wait"}
 TERMINAL = {"delivered", "blocked", "cancelled"}
 _WAKE = threading.Event()
 _STOP = threading.Event()
+_PAUSED = threading.Event()
+_BROWSER_OWNED = False
+_BROWSER_SESSION = None
 _WORKER_GUARD = threading.Lock()
 _RUN_LOCK = threading.Lock()
 _CANCELLED = set()
@@ -41,6 +44,8 @@ def admit_policy(value, capture_start: float):
     """Validate separate delivery consent, binding it to this capture's start."""
     if value is None or value == {"enabled": False}:
         return None
+    if _PAUSED.is_set():
+        raise ValueError("Panther is turning off; new automatic delivery is not admitted")
     allowed = {"enabled", "consent", "target_url", "use_ai", "max_tickets"}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError("Invalid automation policy")
@@ -58,9 +63,17 @@ def admit_policy(value, capture_start: float):
     if (not math.isfinite(capture_start) or capture_start <= 0
             or capture_start > now + 300 or capture_start + CONSENT_SECONDS <= now):
         raise ValueError("Automatic-delivery consent must be from a capture started within the last 24 hours")
-    return {"enabled": True, "consent": True, "policy_version": 1, "target_url": target,
-            "use_ai": value["use_ai"], "max_tickets": cap, "consented_at": capture_start,
-            "admitted_at": now, "expires_at": capture_start + CONSENT_SECONDS}
+    policy = {"enabled": True, "consent": True, "policy_version": 1, "target_url": target,
+              "use_ai": value["use_ai"], "max_tickets": cap, "consented_at": capture_start,
+              "admitted_at": now, "expires_at": capture_start + CONSENT_SECONDS}
+    if _BROWSER_OWNED:
+        policy["browser_session"] = _BROWSER_SESSION
+    return policy
+
+
+def require_browser_active():
+    if _BROWSER_OWNED and _PAUSED.is_set():
+        raise ValueError("Panther is off; new requests and outgoing ticket writes are not admitted")
 
 
 def _validate_policy(policy):
@@ -263,6 +276,23 @@ def _checkpoint(recording_id):
         raise _StopJob()
     job = _load(recording_id)
     if not job or job["status"] in TERMINAL:
+        raise _StopJob()
+    session = job["policy"].get("browser_session")
+    if session is not None and (not _BROWSER_OWNED or session != _BROWSER_SESSION):
+        _set_state(job, "cancelled", "The browser-owned session ended; this automatic job will not resume")
+        raise _StopJob()
+    revoked = storage.ROOT / "browser-revocation.json"
+    if revoked.exists():
+        marker = json.loads(revoked.read_text())
+        cutoff = marker.get("revoked_at") if isinstance(marker, dict) else None
+        if type(cutoff) not in (int, float) or not math.isfinite(cutoff) or cutoff <= 0:
+            _set_state(job, "blocked", "Browser power revocation could not be validated")
+            raise _StopJob()
+        if job["policy"]["admitted_at"] <= cutoff:
+            _set_state(job, "cancelled", "Panther was turned off; this automatic job will not resume")
+            raise _StopJob()
+    if _PAUSED.is_set():
+        _set_state(job, "cancelled", "Panther was turned off; this automatic job will not resume")
         raise _StopJob()
     if _cancelled(recording_id):
         _set_state(job, "cancelled", "Future automatic work was cancelled; in-flight delivery cannot be undone")
@@ -496,7 +526,8 @@ def _process(recording_id):
                 if (preview["target_url"] != job["policy"]["target_url"]
                         or preview["payload_hash"] != item["payload_hash"]):
                     raise ValueError("The frozen destination or proposal payload changed; fresh consent is required")
-                result = integrations.submit_ticket(frozen["recording"], item["ticket"])
+                result = integrations.submit_ticket(frozen["recording"], item["ticket"],
+                    before_send=lambda: _checkpoint(recording_id))
             if not _record_result(recording_id, item["ticket"]["id"], result):
                 return
             if not result.get("ok") or result.get("verified") is not True:
@@ -517,6 +548,8 @@ def _process(recording_id):
 
 
 def _run_once():
+    if _PAUSED.is_set():
+        return False, 30
     if not _RUN_LOCK.acquire(blocking=False):
         return False, 1
     try:
@@ -580,6 +613,7 @@ def start_worker():
     with _WORKER_GUARD:
         if _WORKER is not None and _WORKER.is_alive():
             return
+        _PAUSED.clear()
         _STOP.clear()
         _WORKER = threading.Thread(target=_worker_loop, name="panther-automation", daemon=True)
         _WORKER.start()
@@ -591,3 +625,40 @@ def stop_worker(timeout=2):
     worker = _WORKER
     if worker and worker is not threading.current_thread():
         worker.join(timeout)
+
+
+def revoke_browser_work():
+    """Close admission immediately; persist revocation without waiting on a send.
+
+    The standalone marker has no captured content and does not require the
+    adapter's DATA_LOCK. A request already in flight may finish; every next
+    checkpoint, including a later CLI launch, observes this durable boundary.
+    """
+    _PAUSED.set()
+    _STOP.set()
+    _WAKE.set()
+    storage.write_json(storage.ROOT / "browser-revocation.json", {"revoked_at": time.time()})
+
+
+def cancel_unfinished_browser_work():
+    """Before browser On/after Off, cancel prior jobs without generating/sending."""
+    _PAUSED.set()
+    _STOP.set()
+    _WAKE.set()
+    with storage.DATA_LOCK:
+        for entry in storage._load_manifest().values():
+            if not entry.get("automation"):
+                continue
+            job = _load(entry["id"])
+            if job is None:
+                job = _new_job(entry)
+            if job["status"] not in ACTIVE:
+                continue
+            signal_cancel(entry["id"])
+            _persist_cancel(entry["id"])
+            _refresh_receipts(job)
+            if job["ticket_count"] and job["delivered_count"] == job["ticket_count"]:
+                _set_state(job, "delivered")
+            else:
+                _set_state(job, "cancelled", "Panther was turned off; this automatic job will not resume")
+            _remember_cancelled_delivery(entry["id"], job)

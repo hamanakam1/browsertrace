@@ -28,48 +28,42 @@ Turn a browser session into a clear, reviewable request for improvement.
 
 Panther records the interactions you choose to capture, keeps the evidence on your computer, and turns intent into tickets. Opt into automatic delivery for a session to save, generate, deliver to AI Dashboard, and verify without a separate click for each ticket. Or use manual review and JSON export. **Panther creates tickets; it does not implement the work.**
 
-The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. It works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
+The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. Browser-controlled backend startup is packaged for macOS and Linux; Windows helper packaging remains unimplemented. Capture works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
 ## What works in this version
 
 - **Chosen-tab capture:** start from the extension popup; record clicks, changes, submissions, and navigation within that tab's origin. Capture starts off. Typed values, typed keys, and full page text are excluded.
 - **Visible controls:** a compact popup, recording badge, and floating page panel show capture status. The panel can stop capture and open the drafts. Hiding the panel does not stop capture.
+- **Explicit browser On / Off:** the popup starts Panther's own backend through a one-time registered local helper. Off stops capture, cancels remaining automatic delivery, and shuts down that backend. No login startup, background service installation, or automatic reconnect.
 - **Optional screenshots:** opt in separately for each session to collect up to five screenshots at click or submission points. Screenshot pixels are **not redacted**; inspect them before sharing.
 - **Evidence drafts without a model:** stopping saves the capture and prepares a draft from observed actions and your stated goal. This does not infer that a bug exists.
 - **Optional local AI:** explicitly choose **Generate with local AI** for proposed intents and task decomposition using your configured local Ollama model. No paid or remote inference fallback is used.
 - **Human review:** inspect events and any screenshots, edit the title, problem statement, and acceptance criteria, and save draft edits locally.
 - **AI Dashboard delivery:** preview the exact ticket, then confirm one draft at a time. The adapter creates a backlog ticket with `no-auto`, preserves capture identity for retries, and independently reads it back before showing verified delivery.
-- **Opt-in end-to-end automation:** before Start, choose automatic delivery to the displayed AI Dashboard destination. After Stop, Panther saves the capture, generates unreviewed proposals, delivers up to five, and verifies each ticket. If generation exceeds the cap, the whole job blocks before sending. Progress, retry timing, counts, and cancellation are visible. Durable jobs recover after backend restarts; bounded retries reuse the same identities.
+- **Opt-in end-to-end automation:** while Panther is on, choose automatic delivery to the displayed AI Dashboard destination before Start. After Stop, Panther saves the capture, generates unreviewed proposals, delivers up to five, and verifies each ticket. If generation exceeds the cap, the whole job blocks before sending. Progress, retry timing, counts, and cancellation are visible. Bounded retries reuse the same identities; turning Panther off cancels remaining automatic delivery.
 - **Portable JSON:** export the same draft and provenance for another tool. Additional destinations need an adapter or importer; GitHub, Jira, Linear, and arbitrary native apps are not built-in integrations yet.
 
 Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
 
 ## Quick start
 
-You need Python 3.11+ and Chrome or Edge 116+. The core backend uses Python's standard library; no package installation or Ollama service is needed for evidence drafts.
-
-From a checkout of this repository:
-
-```bash
-python3 backend/server.py
-```
-
-Keep that terminal running. Open [the local review page](http://127.0.0.1:7890/) to check the backend and browse captures. `bash backend/start.sh` starts the same server. Stop it with Ctrl-C. Automatic launchd installation is not part of this quick start.
+You need Python 3.11+, macOS or Linux, and Chrome or Edge 116+ for browser-controlled operation. The core backend uses Python's standard library; no package installation or Ollama service is needed for evidence drafts. There is no login service to enable and no terminal to keep running after helper setup.
 
 Load the extension:
 
 1. Open `edge://extensions/` or `chrome://extensions/`.
 2. Enable **Developer mode**, choose **Load unpacked**, and select this repository's `extension/` directory.
-3. Pin Panther in the browser toolbar. The default `extension/manifest.json` works for both supported browsers; no manifest swapping is needed.
-4. Open the website you want to improve, such as AI Dashboard at `http://127.0.0.1:7878/`.
+3. Copy Panther's extension ID and perform the one-time [browser helper setup](docs/BROWSER_CONTROL.md). Pin Panther in the browser toolbar. The default `extension/manifest.json` works for both supported browsers; no manifest swapping is needed.
+4. Open the website you want to improve, such as AI Dashboard at `http://127.0.0.1:7878/`. Open Panther and click **Turn Panther on**. This starts its backend, not capture; it does not start AI Dashboard or Ollama.
 5. Open Panther, enable capture consent, and write a short goal in **What should improve?** Keep screenshots off unless you want to retain visible page pixels.
 6. For an automated session, enable **Automatically deliver tickets to AI Dashboard** and check the displayed destination. Optionally enable local AI; otherwise evidence-only generation needs no model. These choices apply only to this session.
 7. Click **Start capture**, reproduce the workflow, then stop using the popup or floating panel. With automation enabled, saving, generation, delivery, and independent verification run automatically; watch the status and verified count. You can cancel remaining delivery, but not undo tickets already submitted.
 8. With automation off, click **Review drafts**, check the observed steps, describe the problem or improvement, and add a verifiable expected result. Choose **Save draft edits** before exporting JSON, or **Preview AI Dashboard ticket**, then **Send this reviewed ticket** for manual delivery.
+9. When finished, click **Turn Panther off**. This preserves saved evidence and interrupted local captures, cancels remaining automatic delivery, and stops the browser-owned backend. Already sent tickets and in-flight requests cannot be undone. Quitting the browser process also stops the helper; closing only a window may leave the browser running in background. The next On requires a fresh capture start.
 
 Capture stops when you leave the chosen origin, close the tab, revoke capture consent, or reach the event limit. Same-origin reloads and SPA navigation are supported. A browser restart leaves an interrupted capture available for recovery rather than resuming recording automatically.
 
-Automation is bounded, not unattended surveillance: it never starts a capture by itself. The browser still requires an initial toolbar interaction and capture consent. The backend must be running to generate or deliver; a saved job resumes when it restarts, within the original 24-hour consent window. See [automation behavior and limits](docs/AUTOMATION.md).
+Automation is bounded, not unattended surveillance: it never turns Panther on or starts capture by itself. **Stop & deliver** leaves Panther on so the admitted workflow can finish; **Turn Panther off** cancels remaining delivery. Reopening the popup or browser does not resume it. See [browser controls](docs/BROWSER_CONTROL.md) and [automation behavior and limits](docs/AUTOMATION.md).
 
 ## AI Dashboard and other systems
 
@@ -85,7 +79,7 @@ Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to
 
 ## Local AI and configuration
 
-All settings below are backend environment variables. Set them before starting the server.
+Browser-controlled operation stores configuration during [helper setup](docs/BROWSER_CONTROL.md); use the installer's `--dashboard-url`, `--data-dir`, `--ollama-endpoint`, and `--ollama-model` arguments. The following environment variables apply to the developer-only manually launched backend.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -111,13 +105,15 @@ Screenshots require separate consent and may include any visible content in the 
 
 While recording, the browser persists capture state so the extension service worker can restart. If the backend is unavailable at Stop, Panther shows **Upload pending** and keeps the capture in browser storage. Use **Retry upload** after starting the backend; the same session identity prevents a second recording. **Discard unsaved capture** removes that browser copy. Generation failure has a separate retry because the recording may already be saved.
 
-Opted-in automated sessions also retry stopped uploads automatically, with a bounded retry budget and expiry. After the upload is admitted, a durable backend job owns generation and delivery, even if the popup closes. It freezes the destination, model mode, ticket limit, and draft payloads. Later edits cannot silently change an in-flight delivery. Status failures show unknown/stale information rather than success; verification timestamps describe the last confirmed delivery, not a continuous check of Dashboard state.
+While Panther is on, opted-in automated sessions also retry stopped uploads automatically, with a bounded retry budget and expiry. After the upload is admitted, a durable backend job owns generation and delivery, even if the popup closes. It freezes the destination, model mode, ticket limit, and draft payloads. Turning Panther off or losing the native connection cancels remaining delivery; the next explicit On cancels any stale unfinished jobs before starting the worker. Later edits cannot silently change an in-flight delivery. Status failures show unknown/stale information rather than success; verification timestamps describe the last confirmed delivery, not a continuous check of Dashboard state.
 
 Backend captures have a 30-day retention limit and a cap of 200 records, enforced when storage is accessed. **Delete capture** removes its local capture artifacts, saved drafts, and automation job. It stops remaining delivery, but cannot retract a request already in flight. It does not remove downloaded exports, browser consent history, already submitted dashboard tickets, or delivery receipts. Receipts retain capture identity, a content hash, target, ticket ID, and delivery state to prevent duplicate submissions; they do not retain the full captured evidence. Content-free cancellation markers prevent late uploads from reviving withdrawn delivery consent; their expiry is documented in the [automation contract](docs/AUTOMATION.md).
 
 The backend binds to `127.0.0.1`. Its origin and request-header checks are browser request protections, not user authentication. Treat this as a local single-user tool; do not expose the port publicly or use the header as an access token.
 
 ## Development and verification
+
+For backend-only development, `python3 backend/server.py` (or `bash backend/start.sh`) starts a manual server and local review page at `http://127.0.0.1:7890/`. Stop it with Ctrl-C. The extension will not adopt or stop a manually launched server; stop that server before using browser On / Off.
 
 Run the focused synthetic test suites from the repository root:
 
@@ -130,7 +126,7 @@ The Python tests use temporary data directories and fake loopback dashboard/infe
 
 The optional test-only `jsonschema==4.26.0` dependency enables full export-schema validation; CI installs it explicitly. Without it, validator cases report skips. See [contributor verification instructions](CONTRIBUTING.md#unit-tests).
 
-See the [1.2.0 verification results and pilot limits](docs/AUTOMATION_TEST_RESULTS.md) for automated, real-browser recovery, and bounded live-delivery evidence. The [1.1.0 report](docs/TEST_RESULTS.md) preserves earlier manual-workflow and local-model checks. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
+See the [1.3.0 browser-control verification](docs/BROWSER_CONTROL_TEST_RESULTS.md) for On/Off, native-process, and shutdown-race evidence. The [1.2.0 report](docs/AUTOMATION_TEST_RESULTS.md) records the earlier bounded live-delivery pilot, and the [1.1.0 report](docs/TEST_RESULTS.md) preserves manual-workflow and local-model checks. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
 
 See [ROADMAP.md](ROADMAP.md) for remaining work, [CONTRIBUTING.md](CONTRIBUTING.md) for contributing, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 

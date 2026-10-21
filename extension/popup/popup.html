@@ -9,6 +9,17 @@
 <body>
 <main class="shell">
   <header class="header"><h1>Panther</h1><div class="status" id="status" role="status">Checking…</div></header>
+  <section class="card power-card" aria-label="Panther runtime">
+    <div class="power-heading"><strong id="powerStatus" role="status" aria-live="polite">Panther is off</strong></div>
+    <div class="power-actions">
+      <button id="turnOnBtn" class="btn power-on">Turn Panther on</button>
+      <button id="turnOffBtn" class="btn danger" hidden>Turn Panther off</button>
+    </div>
+    <p id="powerHelp" class="note">Turning on starts the local backend, not capture. Nothing starts at login.</p>
+    <p id="powerError" class="error" role="alert" hidden></p>
+    <div id="setupNeeded" class="setup-needed" hidden><strong>One-time browser helper setup needed</strong><p class="note">Register the local helper for this browser and extension ID. Setup does not install a login service.</p></div>
+    <details class="helper-setup"><summary>Browser helper setup</summary><p class="note">Extension ID: <code id="extensionId"></code></p><a id="setupLink" href="https://github.com/hamanakam1/panther-intent-capture/blob/main/docs/BROWSER_CONTROL.md" target="_blank" rel="noopener noreferrer">Setup instructions</a></details>
+  </section>
   <div id="backendBanner" class="banner warn" hidden>Local backend is unavailable. Capture stays in this browser until upload succeeds.</div>
   <section class="card control-card">
     <button id="recordBtn" class="btn" disabled>Start capture</button>
@@ -21,12 +32,13 @@
     <button id="reviewBtn" class="btn" hidden>Review drafts</button>
     <button id="discardBtn" class="btn" hidden>Discard unsaved capture</button>
     <div class="meta" id="meta" aria-live="polite"></div>
+    <p id="capturePowerHelp" class="note">Stop saves or delivers this session and leaves Panther on. Turn Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events.</p>
     <div id="warning" class="banner warn" role="status" hidden></div>
     <div id="error" class="error" role="alert" hidden></div>
   </section>
   <section class="card consent-card">
     <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
-    <p class="note">Start captures clicks, navigation, and control metadata. Typed values and keys are excluded. Stop automatically saves and generates reviewable drafts locally.</p>
+    <p class="note">While Panther is on, separately consent and Start to capture clicks, navigation, and control metadata. Typed values and keys are excluded. Turning on never starts capture.</p>
     <label for="goal" class="field-label">What should improve?</label>
     <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
     <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>

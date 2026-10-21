@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.2.x   | Yes       |
-| 1.0.x–1.1.x | Upgrade to 1.2.x |
+| 1.3.x   | Yes       |
+| 1.0.x–1.2.x | Upgrade to 1.3.x |
 
 ## Reporting a Vulnerability
 
@@ -27,6 +27,7 @@ panther-intent-capture is designed around these security boundaries:
 * **Separate image consent** — optional screenshot pixels are not redacted and may contain private information
 * **Local-first** — recordings and inference stay on the operator's machine
 * **Visible indicator** — a persistent badge shows while recording
+* **Explicit runtime control** — native messaging starts only from browser On; Off stops capture and remaining automatic delivery. The helper permits only its registered extension origin and fixed lifecycle commands, owns only its child backend, and exposes no HTTP shutdown command. No login item or automatic reconnect is installed.
 * **User deletion** — recordings carry a TTL and can be deleted at any time
 * **Separate delivery consent** — automatic delivery needs its own per-session opt-in, pinned destination, ticket cap, expiry, and bounded retries; manual delivery needs exact preview confirmation
 * **Execution boundaries** — delivered proposals still require review; both manual and automatic delivery preserve backlog and no-auto controls. Panther does not implement the work

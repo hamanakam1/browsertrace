@@ -2,6 +2,8 @@ import { BACKEND_ORIGIN } from "../shared/constants.js";
 import { automationView, safeTicketURL } from "./automation-state.js";
 
 const origin = location.protocol === "chrome-extension:" ? BACKEND_ORIGIN : location.origin;
+const browserControlled = location.protocol === "chrome-extension:";
+let browserPowerOn = !browserControlled;
 const $ = id => document.getElementById(id);
 let selected = null;
 let recordings = [];
@@ -21,6 +23,14 @@ function message(text, error = false) {
   $("message").classList.toggle("error", error);
 }
 async function api(path, body, method = body === undefined ? "GET" : "POST") {
+  if (browserControlled) {
+    try {
+      const state = await chrome.runtime.sendMessage({type: "extension.getPowerState"});
+      browserPowerOn = state?.ok === true && state.power?.state === "on";
+    } catch (_) { browserPowerOn = false; }
+    syncDraftControls();
+    if (!browserPowerOn) throw new Error("Panther is off. Turn Panther on from its browser popup, then refresh this page.");
+  }
   const response = await fetch(origin + "/api/extension/" + path, {
     method, headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
@@ -44,7 +54,7 @@ function button(label, action, className = "") {
   return node;
 }
 function syncDraftControls() {
-  const locked = loading || (selected && automationView(automation, automationStale).locked);
+  const locked = !browserPowerOn || loading || (selected && automationView(automation, automationStale).locked);
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
 }

@@ -17,6 +17,7 @@ Thank you for considering a contribution! panther-intent-capture is an open-sour
 - Confirm typed values and keys are absent from stored events and screenshot capture requires separate consent
 - Verify the floating controls, automatic evidence drafts, offline upload retry, and visible generation failures
 - Verify automatic delivery defaults off, locks its target/mode at Start, shows stages/counts, and stops remaining work on cancellation. Test expiry, duplicate uploads, worker/browser/backend restart, and a lost POST response against a fake destination.
+- Verify browser On is the only native-host launch path; status, alarms, browser restart, and disconnect must not launch it. Verify Off remains reachable during capture/upload/generation, cancels unfinished delivery, preserves evidence, and stops only the owned backend. Use an isolated browser profile and temporary helper/data paths; never alter a personal native-host registration without approval.
 
 ### Backend
 ```bash

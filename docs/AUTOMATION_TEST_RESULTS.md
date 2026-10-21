@@ -1,5 +1,7 @@
 # Panther 1.2.0 automation verification
 
+Historical report for 1.2.0. See [1.3.0 browser-control verification](BROWSER_CONTROL_TEST_RESULTS.md) for explicit On/Off behavior and newer test totals. Browser power is now a stricter boundary: Off cancels remaining automatic jobs, and the next On does not resume abandoned delivery.
+
 Tested on 2026-10-21. This report separates automated regression coverage, loaded-browser checks, and one explicitly authorized live delivery. Panther captures intent and creates tickets; it does not implement or dispatch their work.
 
 ## Automated checks

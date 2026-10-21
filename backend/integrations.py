@@ -28,6 +28,7 @@ FENCE = "not authorized for autonomous execution"
 SOURCE = "panther-intent-capture:agent-proposal"
 REQUEST_TIMEOUT = 8
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+BEFORE_POST = None  # Installed only by the browser-owned runtime; never an HTTP control.
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SECRET = re.compile(r"token|secret|password|credential|auth|api.?key|session|cookie", re.I)
 
@@ -188,7 +189,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ValueError("Dashboard redirects are prohibited; configure its direct loopback URL")
 
 
-def _request(target: str, path: str, payload: dict | None = None) -> dict:
+def _request(target: str, path: str, payload: dict | None = None, *, before_send=None) -> dict:
     req = urllib.request.Request(
         target + path,
         data=json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8") if payload is not None else None,
@@ -196,6 +197,11 @@ def _request(target: str, path: str, payload: dict | None = None) -> dict:
         method="POST" if payload is not None else "GET",
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    if payload is not None:
+        if BEFORE_POST is not None:
+            BEFORE_POST()
+        if before_send is not None:
+            before_send()
     try:
         response = opener.open(req, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as exc:
@@ -332,7 +338,7 @@ def _verify(target: str, item: int, payload: dict) -> None:
         raise ValueError("Dashboard ticket content or review fences differ; it was not updated. Review the existing ticket.")
 
 
-def submit_ticket(recording: dict, ticket: dict) -> dict:
+def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> dict:
     """Submit ONE explicitly admitted draft, preserving uncertain delivery state.
 
     The HTTP route owns manual confirmation; the automation worker owns its
@@ -357,7 +363,7 @@ def submit_ticket(recording: dict, ticket: dict) -> dict:
         storage.write_json(path, receipt)  # failure here must prevent any POST
         try:
             if not receipt.get("item"):
-                response = _request(target, "/api/master/add", payload)
+                response = _request(target, "/api/master/add", payload, before_send=before_send)
                 item = response.get("item")
                 if response.get("ok") is not True or type(item) is not int or item <= 0:
                     receipt.update(state="refused", error="Dashboard did not return a valid ticket ID; intake may be paused or capped.")

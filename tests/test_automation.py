@@ -318,16 +318,16 @@ class AutomationTests(unittest.TestCase):
         self.assertIn("expired", result["error"])
         self.assertEqual(len(self.dashboard.state["posts"]), 1)
 
-    def test_cancel_during_first_send_keeps_receipt_and_prevents_second_send(self):
+    def test_cancel_after_preview_before_network_prevents_all_sends(self):
         rid = self.record()
         generated = self.generated(rid, 2)
         original = integrations.submit_ticket
         entered, release = threading.Event(), threading.Event()
 
-        def hold_send(recording, ticket):
+        def hold_send(recording, ticket, **kwargs):
             entered.set()
             self.assertTrue(release.wait(3))
-            return original(recording, ticket)
+            return original(recording, ticket, **kwargs)
 
         with patch.object(tickets, "generate_drafts", return_value=generated), \
                 patch.object(integrations, "submit_ticket", side_effect=hold_send):
@@ -348,8 +348,8 @@ class AutomationTests(unittest.TestCase):
             self.assertFalse(cancel_thread.is_alive())
         state = self.job(rid)
         self.assertEqual(state["status"], "cancelled", state)
-        self.assertEqual(state["delivered_count"], 1)
-        self.assertEqual(len(self.dashboard.state["posts"]), 1)
+        self.assertEqual(state["delivered_count"], 0)
+        self.assertEqual(len(self.dashboard.state["posts"]), 0)
         self.assertEqual(self.request(f"automation/{rid}", {"action": "retry"})[0], 400)
         self.assertTrue(cancelled)
 

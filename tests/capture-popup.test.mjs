@@ -7,9 +7,11 @@ const script = (await readFile(new URL("../extension/popup/popup.js", import.met
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function fixture(initial, target = "http://127.0.0.1:7878") {
-  let state = initial;
+  const withPower = value => Object.hasOwn(value, "power") ? value : {...value, power: {state: "on", error: "", configured: true}};
+  let state = withPower(initial);
   let interval;
   const calls = [];
+  const fetches = [];
   const responses = new Map();
   const elements = {};
   const element = () => ({ hidden: false, disabled: false, checked: false, value: "", textContent: "", listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren() {} });
@@ -17,17 +19,29 @@ function fixture(initial, target = "http://127.0.0.1:7878") {
     BACKEND_ORIGIN: "http://127.0.0.1:7890", loadConsentLog: async () => [], Date, console, AbortSignal,
     document: { getElementById: (id) => elements[id] ||= element(), createElement: element },
     setInterval: (fn) => { interval = fn; },
-    fetch: async () => ({ ok: true }), confirm: () => true,
+    fetch: async (url) => { fetches.push(url); return { ok: true }; }, confirm: () => true,
     chrome: { tabs: { query: async () => [{ id: 7 }] }, runtime: {
+      id: "abcdefghijklmnopabcdefghijklmnop",
       sendMessage: async (message) => {
         calls.push(structuredClone(message));
+        if (responses.has(message.type)) {
+          const result = await responses.get(message.type)(message);
+          return result?.status ? withPower(result) : result;
+        }
         if (message.type === "extension.getAutomationTarget") return target ? { ok: true, url: target } : { ok: false, error: "Backend offline; destination unknown." };
-        return responses.has(message.type) ? responses.get(message.type)(message) : structuredClone(state);
+        if (message.type === "extension.getPowerState") return {ok: true, power: structuredClone(state.power)};
+        return structuredClone(state);
       }
     } }
   });
   vm.runInContext(script, context);
-  return { elements, calls, respond(type, handler) { responses.set(type, handler); }, state(next) { state = next; interval(); }, async click(id) { await elements[id].listeners.click(); await flush(); } };
+  return { elements, calls, fetches,
+    respond(type, handler) { responses.set(type, handler); },
+    setState(next) { state = withPower(next); },
+    state(next) { state = withPower(next); interval(); },
+    poll() { interval(); },
+    async click(id) { if (!elements[id].disabled) await elements[id].listeners.click(); await flush(); }
+  };
 }
 
 const recording = (screenshotsConsent = true) => ({
@@ -229,4 +243,178 @@ test("pending automatic upload offers read-only reconciliation separately from r
   await f.click("refreshAutomationBtn");
   assert.ok(f.calls.some((call) => call.type === "extension.refreshAutomation"));
   assert.equal(f.calls.some((call) => call.type === "extension.retryUpload"), false);
+});
+
+const powerState = (state, extra = {}) => ({state, error: "", configured: state === "on", ...extra});
+const idlePower = (state = "off") => ({ok: true, enabled: false, status: "idle", session: null, result: null, power: powerState(state)});
+
+test("opening and polling an off popup never starts a helper or contacts the backend", async () => {
+  const f = fixture(idlePower()); await flush();
+  f.poll(); f.poll(); await flush();
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+  assert.equal(f.elements.turnOnBtn.hidden, false);
+  assert.equal(f.elements.turnOffBtn.hidden, true);
+  assert.equal(f.elements.consent.disabled, true);
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.automation.disabled, true);
+  assert.equal(f.fetches.length, 0);
+  assert.ok(f.calls.every(call => call.type === "extension.getStatus"));
+  assert.match(f.elements.automationTarget.textContent, /No backend request is made while off/);
+});
+
+test("Turn on starts only the runtime, checks its destination once, and requires fresh capture consent", async () => {
+  const f = fixture({...idlePower(), enabled: true}); await flush();
+  f.respond("extension.turnOn", () => {
+    f.setState(idlePower("on"));
+    return {ok: true, power: powerState("on")};
+  });
+  await f.click("turnOnBtn");
+  assert.equal(f.elements.powerStatus.textContent, "Panther is on");
+  assert.equal(f.elements.consent.checked, false);
+  assert.equal(f.elements.consent.disabled, false);
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  assert.equal(f.calls.filter(call => call.type === "extension.turnOn").length, 1);
+  assert.equal(f.calls.filter(call => call.type === "extension.getAutomationTarget").length, 1);
+  assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
+  assert.equal(f.fetches.length, 1);
+  f.poll(); f.poll(); await flush();
+  assert.equal(f.fetches.length, 1);
+  assert.match(f.elements.powerHelp.textContent, /Stop & deliver leaves Panther on/);
+});
+
+test("missing native helper shows actionable setup state and the exact extension ID without backend probing", async () => {
+  const f = fixture(idlePower()); await flush();
+  const power = powerState("error", {configured: false, error: "Native helper unavailable. Register com.panther.intent_capture for this browser."});
+  f.respond("extension.turnOn", () => {
+    f.setState({...idlePower(), power});
+    return {ok: false, power};
+  });
+  await f.click("turnOnBtn");
+  assert.equal(f.elements.setupNeeded.hidden, false);
+  assert.equal(f.elements.extensionId.textContent, "abcdefghijklmnopabcdefghijklmnop");
+  assert.match(f.elements.powerError.textContent, /com\.panther\.intent_capture/);
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  assert.equal(f.fetches.length, 0);
+  assert.equal(f.calls.some(call => call.type === "extension.getAutomationTarget"), false);
+});
+
+test("Turn off stays enabled during generation and ignores the superseded generation response", async () => {
+  const old = {ok: true, enabled: true, status: "error", session: null,
+    result: {id: "rec", eventCount: 3, ticketCount: 0, error: "Retry generation"}};
+  const f = fixture(old); await flush();
+  let finishGeneration;
+  f.respond("extension.retryGeneration", () => new Promise(resolve => { finishGeneration = resolve; }));
+  f.respond("extension.turnOff", () => {
+    f.setState({...old, enabled: false, power: powerState("off")});
+    return {ok: true, power: powerState("off")};
+  });
+  const generation = f.elements.generateBtn.listeners.click(); await flush();
+  assert.equal(f.elements.generateBtn.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  await f.click("turnOffBtn");
+  finishGeneration({...old, status: "ready", result: {...old.result, ticketCount: 1, error: ""}});
+  await generation;
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+  assert.equal(f.elements.status.textContent, "Saved information");
+  assert.equal(f.elements.generateBtn.disabled, true);
+  assert.equal(f.calls.filter(call => call.type === "extension.turnOff").length, 1);
+  assert.equal(f.calls.filter(call => call.type === "extension.startRecording").length, 0);
+});
+
+test("Turn off during capture does not invoke Stop-and-deliver and preserves the displayed unsaved count", async () => {
+  const state = recording(); state.session.automation = {...policy};
+  const f = fixture(state); await flush();
+  f.respond("extension.turnOff", () => {
+    f.setState({...state, enabled: false, status: "pending", power: powerState("off")});
+    return {ok: true, power: powerState("off")};
+  });
+  await f.click("turnOffBtn");
+  assert.match(f.elements.meta.textContent, /3 events/);
+  assert.equal(f.elements.status.textContent, "Capture retained");
+  assert.equal(f.elements.retryBtn.disabled, true);
+  assert.equal(f.elements.stopBtn.hidden, true);
+  assert.equal(f.calls.some(call => call.type === "extension.stopRecording"), false);
+  assert.equal(f.calls.some(call => call.type === "extension.retryUpload"), false);
+});
+
+test("Turn off can preempt starting and a late Turn-on response cannot reactivate the popup", async () => {
+  const f = fixture(idlePower()); await flush();
+  let finishOn;
+  f.respond("extension.turnOn", () => new Promise(resolve => { finishOn = resolve; }));
+  f.respond("extension.turnOff", () => ({ok: true, power: powerState("off")}));
+  const starting = f.elements.turnOnBtn.listeners.click(); await flush();
+  assert.equal(f.elements.powerStatus.textContent, "Turning Panther on…");
+  assert.equal(f.elements.turnOffBtn.hidden, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  await f.click("turnOffBtn");
+  finishOn({ok: true, power: powerState("on")}); await starting;
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.fetches.length, 0);
+});
+
+test("a status poll begun before Turn off cannot restore stale On state", async () => {
+  const f = fixture(idlePower("on")); await flush();
+  let finishPoll, reads = 0;
+  f.respond("extension.getStatus", () => ++reads === 1 ? new Promise(resolve => { finishPoll = resolve; }) : idlePower());
+  f.respond("extension.turnOff", () => ({ok: true, power: powerState("off")}));
+  f.poll(); await flush();
+  await f.click("turnOffBtn");
+  finishPoll({...idlePower("on"), enabled: true}); await flush();
+  assert.equal(f.elements.powerStatus.textContent, "Panther is off");
+  assert.equal(f.elements.consent.checked, false);
+  assert.equal(f.elements.recordBtn.disabled, true);
+});
+
+test("destination discovery finishing after Turn off cannot enable automation", async () => {
+  const f = fixture(idlePower("on"));
+  let finishTarget;
+  f.respond("extension.getAutomationTarget", () => new Promise(resolve => { finishTarget = resolve; }));
+  await flush();
+  f.respond("extension.turnOff", () => {
+    f.setState(idlePower()); return {ok: true, power: powerState("off")};
+  });
+  await f.click("turnOffBtn");
+  finishTarget({ok: true, url: "http://127.0.0.1:9999"}); await flush();
+  assert.equal(f.elements.automation.disabled, true);
+  assert.doesNotMatch(f.elements.automationTarget.textContent, /9999/);
+  assert.equal(f.elements.backendBanner.hidden, true);
+});
+
+test("off and unknown-power states block mutation handlers and retain historical delivery information", async () => {
+  for (const power of [powerState("off"), null, {state: "unexpected"}]) {
+    const f = fixture({...automatic("retry_wait"), power}); await flush();
+    for (const id of ["retryAutomationBtn", "cancelAutomationBtn", "generateBtn", "retryBtn", "recordBtn", "refreshAutomationBtn"]) {
+      assert.equal(f.elements[id].disabled, true, id);
+      await f.elements[id].listeners.click();
+    }
+    assert.match(f.elements.meta.textContent, /1\/2 verified delivery receipts/);
+    assert.match(f.elements.meta.textContent, /historical/);
+    assert.equal(f.calls.some(call => !["extension.getStatus"].includes(call.type)), false);
+    assert.equal(f.fetches.length, 0);
+  }
+});
+
+test("loss of runtime status fails closed without hiding the independent Off action", async () => {
+  const f = fixture({...idlePower("on"), enabled: true}); await flush();
+  f.respond("extension.getStatus", () => { throw new Error("Worker unavailable"); });
+  f.poll(); await flush();
+  assert.equal(f.elements.powerStatus.textContent, "Panther needs attention");
+  assert.equal(f.elements.consent.checked, false);
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.turnOffBtn.hidden, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  assert.match(f.elements.powerError.textContent, /Worker unavailable/);
+});
+
+test("power controls precede capture controls and setup links only to the documented repository page", async () => {
+  const html = await readFile(new URL("../extension/popup/popup.html", import.meta.url), "utf8");
+  assert.ok(html.indexOf('id="turnOffBtn"') < html.indexOf('id="recordBtn"'));
+  assert.match(html, /https:\/\/github\.com\/hamanakam1\/panther-intent-capture\/blob\/main\/docs\/BROWSER_CONTROL\.md/);
+  assert.match(html, /Stop saves or delivers this session and leaves Panther on/);
+  assert.match(html, /Turn Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events/);
+  const css = await readFile(new URL("../extension/popup/popup.css", import.meta.url), "utf8");
+  assert.match(css, /\.power-card\s*\{[^}]*position:\s*sticky/);
 });

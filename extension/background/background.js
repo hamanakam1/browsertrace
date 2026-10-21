@@ -1,10 +1,25 @@
 import { createCaptureController } from "../shared/capture.js";
+import { createLifecycleController, trustedExtensionControl } from "../shared/lifecycle.js";
 
-const capture = createCaptureController(chrome, fetch);
+let lifecycle;
+const capture = createCaptureController(chrome, fetch, Date.now, { isPowered: () => lifecycle?.isOn() === true });
+lifecycle = createLifecycleController(chrome, capture);
+const powerCommands = new Set(["extension.turnOn", "extension.turnOff", "extension.getPowerState"]);
+async function dispatch(message, sender) {
+  if (powerCommands.has(message.type)) return lifecycle.message(message, sender);
+  if (message.type === "extension.getStatus" && trustedExtensionControl(chrome, sender)) {
+    // Existing-port status detects a dead owned child. It never connects a
+    // helper, probes an unrelated HTTP listener, or turns anything On.
+    await lifecycle.message({ type: "extension.getPowerState" }, sender);
+  }
+  return capture.message(message, sender);
+}
 // Register synchronously so a suspended worker can wake for every event.
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (!message?.type?.startsWith("extension.") && !message?.type?.startsWith("page.")) return false;
-  capture.message(message, sender).then(reply, (error) => reply({ ok: false, error: error.message }));
+  const operation = dispatch(message, sender);
+  operation.then((result) => reply({ ...result, power: lifecycle.snapshot().power }),
+    (error) => reply({ ok: false, error: error.message, power: lifecycle.snapshot().power }));
   return true;
 });
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
