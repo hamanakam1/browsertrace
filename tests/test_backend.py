@@ -228,7 +228,8 @@ class StorageTests(unittest.TestCase):
 class DraftTests(unittest.TestCase):
     recording = {"id": "test-recording", "start_time": 1000, "url": "http://localhost:8080/?token=secret#work",
                  "goal": "Fix the Save button", "title": "Dashboard", "video_path": ""}
-    events = [{"type": "click", "ts": 1001500, "target": {"tag": "button", "text": "Save"}}]
+    # The extension sends the accessible name as "label"; it never sends page text.
+    events = [{"type": "click", "ts": 1001500, "target": {"tag": "button", "label": "Save"}}]
 
     def test_observed_mode_never_calls_model_and_preserves_evidence(self):
         with patch.object(tickets, "_ollama_decompose", side_effect=AssertionError("must not run")):
@@ -335,6 +336,32 @@ class PrivacyTests(unittest.TestCase):
                     inference.local_endpoint()
         with patch.object(inference, "OLLAMA_ENDPOINT", "http://127.0.0.1:11434/v1/"):
             self.assertEqual(inference.local_endpoint(), "http://127.0.0.1:11434/v1")
+
+    def test_session_identifiers_never_survive_a_url(self):
+        """A session identifier is a credential in disguise; the extension redacts it."""
+        self.assertEqual(redaction.sanitize_url("https://example.test/session/abc123"),
+                         "https://example.test/session/REDACTED")
+        self.assertEqual(redaction.sanitize_url("https://example.test/my-session-id/42"),
+                         "https://example.test/my-session-id/REDACTED")
+        self.assertEqual(redaction.sanitize_url("https://example.test/#session"),
+                         "https://example.test/")
+
+    def test_an_event_always_carries_a_timestamp(self):
+        """Without one, the event drops out of the ticket's reproduction steps."""
+        for payload in ({"type": "click", "url": "https://example.test/"},
+                        {"type": "click", "ts": "later", "url": "https://example.test/"}):
+            with self.subTest(payload=payload):
+                clean = redaction.sanitize_capture_event(payload)
+                self.assertIsInstance(clean["ts"], int)
+                self.assertGreater(clean["ts"], 0)
+
+    def test_page_text_is_not_read_from_a_text_field(self):
+        """The extension sends an accessible name as "label" and never page text."""
+        clean = redaction.sanitize_capture_event(
+            {"type": "click", "ts": 1, "target": {"tag": "button", "text": "private page text"}}
+        )
+        self.assertEqual(clean["target"], {"tag": "button"})
+        self.assertNotIn("private", json.dumps(clean))
 
 
 if __name__ == "__main__":

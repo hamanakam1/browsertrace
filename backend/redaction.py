@@ -1,13 +1,16 @@
 """Secret redaction for the extension backend (defense in depth).
 
 Mirrors the extension's frontend redaction so that secrets are never
-persisted even if a client posts directly to the backend.
+persisted even if a client posts directly to the backend. The two
+implementations are held to the same behaviour by
+``tests/test_redaction_parity.py``; keep them in step.
 """
 
 from __future__ import annotations
 
 import math
 import re
+import time
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -24,6 +27,13 @@ REDACT_FIELD_IDS = {
 _SECRET_PATTERNS = [
     re.compile(r"secret|token|key|pass|cred|auth|cookie", re.IGNORECASE),
 ]
+# URL rules also treat a session segment as secret: the extension redacts the
+# path segment after a session-like part, because a session identifier is a
+# credential in disguise. Field names keep the narrower rule, so a field called
+# "session_count" stays readable.
+_URL_SECRET_PATTERNS = [
+    re.compile(r"secret|token|key|pass|cred|auth|cookie|session", re.IGNORECASE),
+]
 
 
 def sanitize_url(value: Any) -> str:
@@ -39,22 +49,22 @@ def sanitize_url(value: Any) -> str:
             host = f"[{host}]"
         if parsed.port:
             host += f":{parsed.port}"
-        fragment = parsed.fragment if re.fullmatch(r"/?[A-Za-z][A-Za-z0-9_/-]{0,99}", parsed.fragment) else ""
+        fragment = parsed.fragment if re.fullmatch(r"/?[A-Za-z][A-Za-z0-9_/-]{0,100}", parsed.fragment) else ""
         parts = parsed.path.split("/")
-        path = "/".join("REDACTED" if len(part) > 48 or (index and _looks_secret(unquote(parts[index - 1])))
+        path = "/".join("REDACTED" if len(part) > 48 or (index and _looks_secret(unquote(parts[index - 1]), _URL_SECRET_PATTERNS))
                         else part for index, part in enumerate(parts))
-        if _looks_secret(fragment):
+        if _looks_secret(fragment, _URL_SECRET_PATTERNS):
             fragment = ""
         return urlunsplit((parsed.scheme, host, path, "", fragment))[:1000]
     except ValueError:
         return ""
 
 
-def _looks_secret(key: str) -> bool:
+def _looks_secret(key: str, patterns: list[re.Pattern[str]] | None = None) -> bool:
     k = str(key).lower()
     if k in REDACT_FIELD_NAMES or k in REDACT_FIELD_IDS:
         return True
-    return any(p.search(k) for p in _SECRET_PATTERNS)
+    return any(p.search(k) for p in (patterns or _SECRET_PATTERNS))
 
 
 def _scrub_value(value: Any) -> Any:
@@ -97,25 +107,47 @@ def sanitize_text(value: Any, limit: int = 120) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:limit]
 
 
+def _event_timestamp(value: Any) -> int:
+    """The event timestamp, defaulting to now like the extension does.
+
+    An event without a usable timestamp still has to carry one: the ticket
+    references and the model's relative timing read it. Dropping it would make
+    evidence disappear from the reproduction steps.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return int(value)
+    return int(time.time() * 1000)
+
+
 def sanitize_capture_event(payload: Any) -> Any:
-    """Retain semantic interactions only; never typed keys, values or page text."""
+    """Retain semantic interactions only; never typed keys, values or page text.
+
+    The allowlist mirrors the extension exactly: a label is only kept when the
+    extension would have sent one, and page text is never read from a
+    ``text`` field, because the extension never sends one.
+    """
     if not isinstance(payload, dict) or payload.get("type") not in ("click", "change", "submit", "navigation"):
         return None
-    event = {"type": payload["type"], "url": sanitize_url(payload.get("url"))}
-    timestamp = payload.get("ts")
-    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and math.isfinite(timestamp):
-        event["ts"] = timestamp
+    event = {
+        "type": payload["type"],
+        "ts": _event_timestamp(payload.get("ts")),
+        "url": sanitize_url(payload.get("url")),
+    }
     target = payload.get("target")
     if isinstance(target, dict):
         semantic = {}
         for key in ("tag", "role", "id", "type", "dataTab", "dataTicket"):
-            if isinstance(target.get(key), str):
-                semantic[key] = sanitize_text(target[key])
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                semantic[key] = sanitize_text(value)
         tag = semantic.get("tag", "").lower()
         if tag in ("button", "a"):
-            semantic["label"] = sanitize_text(target.get("label") or target.get("text"))
-        if "href" in target:
-            semantic["href"] = sanitize_url(target["href"])
+            label = target.get("label")
+            if isinstance(label, str) and label:
+                semantic["label"] = sanitize_text(label)
+        href = target.get("href")
+        if isinstance(href, str) and href:
+            semantic["href"] = sanitize_url(href)
         event["target"] = semantic
     return event
 

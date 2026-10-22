@@ -74,7 +74,8 @@ Both browser workflows require explicit **Turn Panther on** first. Turning On do
 - **User control**: Can delete any capture, 30-day TTL
 
 ### Security Measures
-- **Redaction**: Typed values and keys are excluded; common-secret and URL sanitization is best-effort. Optional screenshot pixels are not redacted.
+- **Redaction**: Typed values and keys are excluded; common-secret and URL sanitization is best-effort. Optional screenshot pixels are not redacted. The backend re-redacts what a client posts, and it is held to the same behaviour as the extension by a shared parity test, so the two cannot drift apart.
+- **URL identity only**: Credentials, query strings and secret-bearing path segments (including session identifiers) are removed from stored URLs.
 - **Local-only binding**: Backend binds to 127.0.0.1 only
 - **Content security**: CSP headers, no eval
 - **Provenance tracking**: All tickets include capture identity
