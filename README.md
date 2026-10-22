@@ -31,6 +31,23 @@ Panther records the interactions you choose to capture, keeps the evidence on yo
 
 The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. Browser-controlled backend startup is packaged for macOS and Linux; Windows helper packaging remains unimplemented. Capture works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
+## What it looks like
+
+Both screenshots below are the real product, not a mock-up.
+[`scripts/capture_screenshots.py`](scripts/capture_screenshots.py) starts the
+actual backend, records a synthetic capture through the actual API, and
+photographs the actual options page with a real browser. The origin, the page
+and the ticket data are fictional, so nothing here identifies a real system.
+
+The options page, with the local backend connected and one capture waiting to
+be reviewed:
+
+![The Panther options page, showing the local backend connected and one captured session](docs/screenshots/options-dashboard.png)
+
+The three API calls behind it — the health check, the capture, and the listing:
+
+![The Panther backend API: the health check, recording a capture, and listing the recordings](docs/screenshots/api.png)
+
 ## What works in this version
 
 - **Chosen-tab capture:** start from the extension popup; record clicks, changes, submissions, and navigation within that tab's origin. Capture starts off. Typed values, typed keys, and full page text are excluded.
