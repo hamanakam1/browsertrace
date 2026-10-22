@@ -71,6 +71,8 @@ Recording times are Unix seconds; event references use Unix milliseconds. `event
 
 Observed drafts summarize actions and the supplied goal without a model. AI drafts identify their model, mode, and generation revision. Their `hypothesis` and `suggested_verification_steps` are unverified proposals kept separately from `steps_to_reproduce`, which is derived from captured events. `proposal_verified: false` means the proposed problem has not been established by those events. Preserve those distinctions in downstream tools. Preserve unresolved questions and missing acceptance criteria instead of inventing certainty. Draft IDs remain stable for the recording, generation mode, and draft position; editing a draft does not create a new identity.
 
+The `evidence` sentence states the scope the draft was drawn from. When a recording has more events than the generator analyses, it says how many of how many were used and that the rest were not analysed; `provenance.events_total` and `provenance.events_truncated` carry the same fact in machine-readable form. Importers should show the scope rather than presenting a truncated analysis as a complete one.
+
 ### Versioning and validation
 
 Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.0 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
