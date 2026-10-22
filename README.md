@@ -5,6 +5,7 @@
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue.svg)](https://developer.chrome.com/docs/extensions/mv3/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Local First](https://img.shields.io/badge/privacy-local--first-green.svg)](https://github.com/hamanakam1/panther-intent-capture)
+[![Releases](https://img.shields.io/github/v/release/hamanakam1/panther-intent-capture)](https://github.com/hamanakam1/panther-intent-capture/releases)
 
 ```text
         ⠀⠀⠀⠀⢀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣄⠀⠀⠀⠀
