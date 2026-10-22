@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Nothing yet
+- A redaction parity test that runs one corpus through the extension and the backend and requires the same result, so the two implementations cannot drift apart.
 
 ### Changed
 - Nothing yet
@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
-- Nothing yet
+- The backend now redacts session identifiers in URL path segments and fragments, matching the extension. A client posting directly to the backend could previously store a session identifier that the extension would have removed.
+- The backend now stamps every capture event with a timestamp when the client omits one, instead of dropping the event's timing and leaving it out of the ticket's reproduction steps.
+- The backend no longer reads a button label from a `text` field. The extension sends the accessible name as `label` and never sends page text.
 
 ### Security
 - Nothing yet
