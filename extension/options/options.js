@@ -289,6 +289,10 @@ function renderTickets(data, recordingId = selected.id) {
       card.append(element("p", "Page-reported failures (observations, not verified defects): "
         + ticket.diagnostics.map(failureLine).join("; "), "muted"));
     }
+    if ((ticket.friction || []).length) {
+      card.append(element("p", "Possible friction (hypotheses, not confirmed defects): "
+        + ticket.friction.map(finding => finding.title).join("; "), "muted"));
+    }
     card.append(element("p", ticket.evidence || "", "muted"));
     const actions = element("div", "", "actions");
     const patch = () => ({title: fields.title.value.trim(), description: fields.description.value.trim(), acceptance_criteria: fields.acceptance_criteria.value.split("\n").map(x => x.trim()).filter(Boolean)});

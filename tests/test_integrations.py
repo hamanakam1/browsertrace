@@ -105,7 +105,7 @@ class IntegrationsTests(unittest.TestCase):
 
     def test_generic_export_is_portable_and_does_not_contact_dashboard(self):
         result = integrations.export_bundle(self.recording, {"data": {"tickets": [self.ticket]}})
-        self.assertEqual(result["schema_version"], "1.1")
+        self.assertEqual(result["schema_version"], "1.2")
         self.assertEqual(result["tickets"][0]["acceptance_criteria"], ["The edited text is retained"])
         self.assertFalse(result["authority"]["execution_authorized"])
         self.assertTrue(result["tickets"][0]["requires_review"])

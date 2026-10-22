@@ -19,6 +19,9 @@ from tickets import GENERATION_REVISION, capture_diagnostics, generate_drafts, l
 from integrations import SCHEMA_VERSION, dashboard_status, export_bundle, preview_ticket, submit_ticket
 
 UPLOAD_LIMIT = 64 * 1024 * 1024
+# The backend's own HTTP API version. It moves independently of the exported
+# intent-bundle contract, which is reported separately as bundle_schema_version.
+API_VERSION = "1.1"
 UI_ROOT = Path(__file__).resolve().parents[2] / "extension"
 UI_FILES = {"options/options.html", "options/options.js", "options/options.css", "options/automation-state.js", "shared/constants.js"}
 
@@ -358,7 +361,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
             return
         parts = path[len(prefix):].strip("/").split("/")
         if parts == ["health"] and method == "GET":
-            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": "1.1",
+            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": API_VERSION,
                                  "bundle_schema_version": SCHEMA_VERSION,
                                  "capabilities": ["events", "screenshots", "diagnostics", "drafts", "json-export", "ticket-service", "automatic-delivery"]})
             return

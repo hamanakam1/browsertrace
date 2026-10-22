@@ -151,7 +151,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(health["status"], "ok")
         self.assertIn("diagnostics", health["capabilities"])
         self.assertEqual(health["bundle_schema_version"], integrations.SCHEMA_VERSION)
-        self.assertEqual(health["schema_version"], health["bundle_schema_version"])
+        self.assertRegex(health["schema_version"], r"^\d+\.\d+$")
 
     def test_consent_and_malformed_inputs_are_rejected(self):
         for changes in ({"consent": False}, {"events": {}}, {"sessionId": ""}, {"startTime": -1},
