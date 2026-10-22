@@ -307,6 +307,24 @@ class DraftTests(unittest.TestCase):
         self.assertTrue(draft["provenance"]["events_truncated"])
         self.assertEqual(draft["provenance"]["events_total"], 400)
 
+    def test_truncated_evidence_says_so_in_words(self):
+        """The reader of a draft or a delivered ticket sees the evidence sentence."""
+        draft = tickets.generate_drafts(self.recording, self.events * 400)["tickets"][0]
+        self.assertIn("The first 300 of 400 recorded events were used", draft["evidence"])
+        self.assertIn("the rest were not analysed", draft["evidence"])
+        self.assertNotIn("400 recorded events;", draft["evidence"])
+
+    def test_ai_evidence_says_so_in_words_when_truncated(self):
+        with patch.object(tickets, "_ollama_decompose", return_value='[{"title": "Investigate saving", "event_indices": [1]}]'):
+            draft = tickets.generate_drafts(self.recording, self.events * 400, use_ai=True)["tickets"][0]
+        self.assertIn("The first 300 of 400 recorded events were used", draft["evidence"])
+        self.assertIn("the rest were not analysed", draft["evidence"])
+
+    def test_untruncated_evidence_keeps_its_plain_wording(self):
+        draft = tickets.generate_drafts(self.recording, self.events)["tickets"][0]
+        self.assertEqual(draft["evidence"], "1 recorded event; no AI inference was performed.")
+        self.assertFalse(draft["provenance"]["events_truncated"])
+
 
 class PrivacyTests(unittest.TestCase):
     def test_url_redaction_and_nested_secret_descriptors(self):

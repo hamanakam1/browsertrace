@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The backend now redacts session identifiers in URL path segments and fragments, matching the extension. A client posting directly to the backend could previously store a session identifier that the extension would have removed.
 - The backend now stamps every capture event with a timestamp when the client omits one, instead of dropping the event's timing and leaving it out of the ticket's reproduction steps.
 - The backend no longer reads a button label from a `text` field. The extension sends the accessible name as `label` and never sends page text.
+- A draft's evidence sentence now states the scope it was drawn from. A truncated session used to report "300 recorded events" when more had been recorded; the fact was only in the machine-readable provenance.
 
 ### Security
 - Nothing yet
