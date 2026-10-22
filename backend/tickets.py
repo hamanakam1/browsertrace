@@ -117,6 +117,15 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
     mode = "ai" if use_ai else "observed"
     goal = _text(recording.get("goal"), 2000)
     source_url = sanitize_url(recording.get("url"))
+    # The human-readable evidence has to state the scope it was drawn from.
+    # The provenance marks the truncation, but a reader of the draft (or of
+    # the delivered ticket) sees the evidence sentence, not the provenance.
+    if len(events) > len(observed):
+        scope = (f"The first {len(observed)} of {len(events)} recorded events were used "
+                 "and the rest were not analysed")
+    else:
+        unit = "event" if len(observed) == 1 else "events"
+        scope = f"{len(observed)} recorded {unit}"
     frames = []
     if use_ai:
         start_ms = float(recording.get("start_time", 0)) * 1000
@@ -142,7 +151,7 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
             ) + "This draft summarizes recorded actions. Review the evidence and describe any bug or improvement before sending.",
             "steps_to_reproduce": [_event_step(event) for event in observed[:20]],
             "acceptance_criteria": [], "component": "unspecified",
-            "priority": "medium", "evidence": f"{len(observed)} recorded events; no AI inference was performed.",
+            "priority": "medium", "evidence": f"{scope}; no AI inference was performed.",
             "event_indices": list(range(1, min(len(observed), 50) + 1)),
             "desired_behavior": goal,
             "questions": ["What should happen, and what happened instead?"] if not goal else ["What observable result would confirm this change?"],
@@ -176,7 +185,7 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
             description = f"Unverified AI proposal: {description}"[:2000]
         observed_steps = [_event_step(observed[event_index - 1]) for event_index in indices[:20]]
         evidence = (
-            f"{len(observed)} recorded events; {len(references)} event references attached. "
+            f"{scope}; {len(references)} event references attached. "
             "These observations do not establish a bug. Verify the proposed issue against the capture."
         ) if use_ai else _text(candidate.get("evidence"), 1000)
         drafts.append({
