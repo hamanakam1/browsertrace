@@ -16,6 +16,8 @@ The component sketch below preserves the earlier high-level overview, not the co
 │  ├── Popup (popup/)        - User controls, consent, automation settings    │
 │  ├── Content Script        - DOM event capture, redaction, page panel       │
 │  ├── Background SW         - Orchestration, screenshot capture, messaging   │
+│  ├── Main-world relay      - Page's own uncaught failures, forwarded to the │
+│  │                            content script (no extension privilege)      │
 │  ├── Offscreen Document    - MediaRecorder for future video support          │
 │  └── Options Page          - Review drafts, view captures, manage settings  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -64,6 +66,17 @@ Both browser workflows require explicit **Turn Panther on** first. Turning On do
 5. **Status Updates**: Extension polls job status, shows progress
 6. **Completion**: User sees verified ticket count
 
+### Page-failure capture
+
+Interactions and page failures share one ordered timeline, so a ticket can say
+what failed and when. The content script observes two channels directly
+(HTTP error responses, through the browser's resource timing, and failed
+subresources). The page's own uncaught exceptions and unhandled rejections
+are only visible from the page's own world, so the background installs a
+bounded relay there for the duration of the capture. The relay holds no
+extension privilege and forwards a message and a location only. See
+[session diagnostics](SESSION_DIAGNOSTICS.md).
+
 ## Privacy & Security
 
 ### Privacy Principles
@@ -72,6 +85,7 @@ Both browser workflows require explicit **Turn Panther on** first. Turning On do
 - **Page-scoped**: Only chosen tab/origin, no full desktop capture
 - **No telemetry**: No analytics, no external reporting
 - **User control**: Can delete any capture, 30-day TTL
+- **Consent-scoped failures**: A failure that happened before the capture began is outside the consented window and is not recorded.
 
 ### Security Measures
 - **Redaction**: Typed values and keys are excluded; common-secret and URL sanitization is best-effort. Optional screenshot pixels are not redacted. The backend re-redacts what a client posts, and it is held to the same behaviour as the extension by a shared parity test, so the two cannot drift apart.
@@ -112,6 +126,7 @@ Capture start/stop is controlled inside the extension, not through HTTP start/st
 
 - `POST /record` - Save a stopped capture and admit an explicitly opted-in automatic policy
 - `GET /recordings` - List saved captures
+- `GET /recordings/:id/diagnostics` - Read the page-reported failures a capture recorded
 - `GET /tickets/:id` and `POST /tickets/:id` - Read or generate drafts for a capture
 - `POST /tickets/:id/review` - Save reviewed draft edits
 - `POST /integrations/ticket-service/preview/:id` and `POST /integrations/ticket-service/submit/:id` - Preview and confirm manual ticket delivery

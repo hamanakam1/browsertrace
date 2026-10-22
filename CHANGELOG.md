@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [1.6.0] - 2026-10-22
+
+### Added
+- Page-failure capture: uncaught exceptions, unhandled promise rejections, HTTP error responses and failed subresources are recorded in the same ordered timeline as the interactions, so a ticket can name a cause instead of only a symptom.
+- A bounded main-world relay that lets an isolated content script observe the page's own uncaught failures. It forwards a message and a location only, holds no extension privilege, and reads no page text, input values or typed keys.
+- A "Page-reported failures" section in the review UI, per-draft failure summaries, and a `GET /api/extension/recordings/<id>/diagnostics` route.
+- `diagnostics` on each exported ticket and `diagnostic_count` on the exported recording, with a new `diagnostic_count` in draft provenance.
+
+### Changed
+- The portable intent bundle moves to schema version 1.1. The addition is compatible and optional; 1.0 consumers must select the schema they understand and quarantine an unknown version.
+- A failure keeps the time it actually happened, so the recorded timeline stays truthful. Failures that happened before the capture began stay outside the consented window.
+- A regenerated draft keeps the fields a reviewer already changed, instead of discarding that decision.
+
+### Fixed
+- Nothing yet
+
+### Security
+- A page controls its own error stream and can present a failure it did not have. A failure is therefore an observation, never a verified defect, a reproduction, or permission to act, and it can only ever reach a draft.
+- Console output, stack traces, page text, typed values and keystrokes are never captured, including as part of a failure.
+- No new permission, host permission or startup behaviour was added. The relay is installed only while a consented capture is active.
+
 ## [1.5.0] - 2026-10-21
 
 ### Added

@@ -19,12 +19,21 @@ class Element {
 }
 
 function fixture() {
-  const messages = [], listeners = {}, windowListeners = {}, timers = new Map();
+  const messages = [], listeners = {}, windowListeners = {}, timers = new Map(), observers = [];
   let nextTimer = 0, onMessage;
   let status = { ok: true, status: "recording", session: { eventCount: 0 } };
   const root = new Element("html");
+  class FakePerformanceObserver {
+    constructor(callback) { this.callback = callback; this.options = null; observers.push(this); }
+    observe(options) { this.options = options; }
+    disconnect() {}
+  }
+  class FakeCustomEvent {
+    constructor(type, init) { this.type = type; this.detail = init?.detail; }
+  }
   const context = vm.createContext({
-    URL, Date, console,
+    URL, Date, console, CustomEvent: FakeCustomEvent, PerformanceObserver: FakePerformanceObserver,
+    performance: { timeOrigin: 1700000000000 },
     location: { href: "http://127.0.0.1:8080/#master" },
     document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
     window: { addEventListener: (type, fn) => { windowListeners[type] = fn; } },
@@ -41,15 +50,20 @@ function fixture() {
   });
   vm.runInContext(script, context);
   return {
-    context, root, messages, listeners, windowListeners, timers,
-    start(automationEnabled = false) { onMessage({ type: "extension.captureStart", sessionId: "session-1", automationEnabled }, {}, () => {}); },
+    context, root, messages, listeners, windowListeners, timers, observers,
+    start(automationEnabled = false, diagnosticNonce = "nonce-1", captureStartMs = 0) { onMessage({ type: "extension.captureStart", sessionId: "session-1", automationEnabled, diagnosticNonce, captureStartMs }, {}, () => {}); },
     stop() { onMessage({ type: "extension.captureStop" }, {}, () => {}); },
     state(value) { status = value; },
     dispatch(type, target, path = [target], isTrusted = true) {
       for (const listener of listeners[type] || []) listener({ target, isTrusted, composedPath: () => path });
     },
+    emitResource(entry) {
+      const observer = observers[observers.length - 1];
+      observer?.callback({ getEntries: () => [{ startTime: 0, ...entry }] });
+    },
     tick(interval) { for (const timer of timers.values()) if (timer.interval === interval) timer.fn(); },
-    events() { return messages.filter((message) => message.type === "page.interaction"); }
+    events() { return messages.filter((message) => message.type === "page.interaction"); },
+    failures() { return messages.filter((message) => message.type === "page.diagnostic"); }
   };
 }
 
@@ -157,4 +171,73 @@ test("floating panel exposes generating and ready draft state and links to revie
   assert.equal(box.children[2].children[1].hidden, false);
   box.children[2].children[1].listeners.click();
   assert.equal(f.messages.at(-1).type, "page.openReview");
+});
+
+test("page failures are reported as bounded observations and never read page text", () => {
+  const f = fixture(); f.start();
+  const image = new Element("img");
+  image.src = "http://127.0.0.1:8080/missing.png";
+  f.dispatch("error", image);
+  const failure = f.failures().at(-1);
+  assert.equal(failure.payload.type, "diagnostic");
+  assert.equal(failure.payload.diagnostic.kind, "resource_error");
+  assert.equal(failure.payload.diagnostic.source, "http://127.0.0.1:8080/missing.png");
+  assert.equal(failure.payload.diagnostic.message, "A img resource failed to load");
+  // The failure carries no page text, no typed value and no control target.
+  assert.deepEqual(Object.keys(failure.payload.diagnostic).sort(), ["kind", "message", "source"]);
+  assert.equal(failure.payload.target, undefined);
+});
+
+test("an HTTP error response is reported with its status and no other request detail", () => {
+  const f = fixture(); f.start();
+  f.emitResource({ name: "http://127.0.0.1:8080/api/tickets", responseStatus: 500, initiatorType: "fetch" });
+  f.emitResource({ name: "http://127.0.0.1:8080/api/ok", responseStatus: 200, initiatorType: "fetch" });
+  f.emitResource({ name: "http://127.0.0.1:8080/opaque", responseStatus: 0, initiatorType: "fetch" });
+  const failures = f.failures();
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].payload.diagnostic.kind, "http_error");
+  assert.equal(failures[0].payload.diagnostic.status, 500);
+  assert.equal(failures[0].payload.diagnostic.source, "http://127.0.0.1:8080/api/tickets");
+});
+
+test("the page's own uncaught failures are relayed only for the current session nonce", () => {
+  const f = fixture(); f.start(false, "nonce-1");
+  for (const listener of f.listeners["panther-diagnostic"] || []) {
+    listener({ detail: { nonce: "wrong-nonce", kind: "uncaught_exception", message: "forged" } });
+    listener({ detail: { nonce: "nonce-1", kind: "uncaught_exception", message: "TypeError: x is not a function", source: "http://127.0.0.1:8080/app.js", line: 12, column: 3 } });
+    listener({ detail: { nonce: "nonce-1", kind: "unhandled_rejection", message: "rejected" } });
+  }
+  const failures = f.failures();
+  assert.equal(failures.length, 2);
+  assert.equal(failures[0].payload.diagnostic.kind, "uncaught_exception");
+  assert.equal(failures[0].payload.diagnostic.message, "TypeError: x is not a function");
+  assert.equal(failures[0].payload.diagnostic.line, 12);
+  assert.equal(failures[1].payload.diagnostic.kind, "unhandled_rejection");
+  assert.doesNotMatch(JSON.stringify(failures), /forged/);
+});
+
+test("a failure that happened before the capture began stays outside the consented window", () => {
+  const f = fixture();
+  f.start(false, "nonce-1", 1700000000000);
+  // A page-load failure from before the capture started.
+  f.emitResource({ name: "http://127.0.0.1:8080/api/early", responseStatus: 500, initiatorType: "fetch", startTime: -5000 });
+  assert.equal(f.failures().length, 0);
+  // A failure during the capture is kept, and carries its own real time so
+  // the recorded timeline stays truthful.
+  f.emitResource({ name: "http://127.0.0.1:8080/api/late", responseStatus: 500, initiatorType: "fetch", startTime: 2000 });
+  assert.equal(f.failures().length, 1);
+  assert.equal(f.failures()[0].payload.ts, 1700000002000);
+  assert.equal(f.failures()[0].payload.diagnostic.source, "http://127.0.0.1:8080/api/late");
+});
+
+test("page failures stop with capture and are bounded per session", () => {
+  const f = fixture(); f.start();
+  for (let index = 0; index < 80; index++) {
+    f.emitResource({ name: `http://127.0.0.1:8080/api/${index}`, responseStatus: 500, initiatorType: "fetch" });
+  }
+  assert.ok(f.failures().length <= 50, `expected a bounded number of failures, got ${f.failures().length}`);
+  f.stop();
+  const before = f.failures().length;
+  f.emitResource({ name: "http://127.0.0.1:8080/api/after", responseStatus: 500, initiatorType: "fetch" });
+  assert.equal(f.failures().length, before);
 });

@@ -19,6 +19,43 @@ const SCREENSHOT_COOLDOWN_MS = 3000;
 const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "extension-v1" };
 const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecording", "extension.cancelAutomation", "extension.openReview", "extension.analyzeLive", "extension.cancelLiveAnalysis"]);
 
+/**
+ * Install the main-world relay that reports the page's own uncaught failures.
+ *
+ * An isolated world cannot observe the page's uncaught exceptions or
+ * unhandled rejections, so this small relay is injected into the page's world.
+ * It forwards a bounded message and a location only. It never reads page
+ * text, input values or typed keys, and it holds no extension privilege: the
+ * page can already say anything it likes in its own error stream, so Panther
+ * treats what arrives here as an observation and never as a verified defect.
+ */
+export function pantherDiagnosticRelay(nonce) {
+  if (!nonce || typeof nonce !== "string") return;
+  const guard = "__pantherDiagnostic" + nonce;
+  if (globalThis[guard]) return;
+  globalThis[guard] = true;
+  const relay = (kind, payload) => {
+    try {
+      document.dispatchEvent(new CustomEvent("panther-diagnostic", { detail: { nonce, kind, ...payload } }));
+    } catch { /* The page changed under us; capture continues without it. */ }
+  };
+  globalThis.addEventListener("error", (event) => {
+    relay("uncaught_exception", {
+      message: String(event.message || ""),
+      source: String(event.filename || ""),
+      line: Number.isInteger(event.lineno) ? event.lineno : 0,
+      column: Number.isInteger(event.colno) ? event.colno : 0
+    });
+  });
+  globalThis.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    relay("unhandled_rejection", {
+      message: String((reason && reason.message) || reason || ""),
+      source: ""
+    });
+  });
+}
+
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
   let queue = Promise.resolve();
@@ -365,10 +402,23 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
 
   async function inject(session) {
     requirePower();
+    // The page's own uncaught failures are only observable from the page's
+    // world. Install that relay first so a failure during page setup is not
+    // lost. A relay that cannot be installed only removes exception detail.
+    try {
+      await api.scripting.executeScript({
+        target: { tabId: session.tabId, frameIds: [0] },
+        world: "MAIN",
+        func: pantherDiagnosticRelay,
+        args: [session.diagnosticNonce]
+      });
+    } catch { /* Exception diagnostics stay unavailable; capture continues. */ }
+    requirePower();
     await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
     requirePower();
     const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId,
-      automationEnabled: !!session.automation && !session.automationWithdrawn });
+      automationEnabled: !!session.automation && !session.automationWithdrawn, diagnosticNonce: session.diagnosticNonce,
+      captureStartMs: session.startTime });
     if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
   }
 
@@ -399,7 +449,8 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       startTime: now(), url: sanitizeUrl(tab.url), title: sanitizeText(tab.title || "", 200),
       goal: sanitizeText(message.goal || "", 1000), extensionId: api.runtime.id,
       screenshotConsent: message.screenshots === true, events: [], screenshots: [], lastScreenshotTs: 0, warning: "",
-      automation, uploadAttempts: 0, nextUploadRetryAt: null, automationWithdrawn: false
+      automation, uploadAttempts: 0, nextUploadRetryAt: null, automationWithdrawn: false,
+      diagnosticNonce: crypto.randomUUID()
     };
     if (automation) session.recordingId = await recordingId(session.extensionId, session.sessionId);
     requirePower();
@@ -432,7 +483,16 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     session.lastScreenshotTs = ts;
   }
 
-  async function interaction(message, sender) {
+  /**
+   * Record an interaction, or a page failure the page itself disclosed.
+   *
+   * Both join the same ordered timeline, so a reviewer can see what happened
+   * and what failed, in order. A failure is an observation, not a verified
+   * defect, and it never leaves the local capture on its own. Both are
+   * refused unless the capture is recording, consent is current, and the
+   * sender is the captured top frame of the captured origin.
+   */
+  async function recordEvent(message, sender) {
     if (!powered()) return { ok: false, ignored: true };
     const session = await read(SESSION_KEY);
     const settings = await read(SETTINGS_KEY) || {};
@@ -594,7 +654,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   }
 
   async function handle(message, sender) {
-    if (message.type === "page.interaction") return interaction(message, sender);
+    if (message.type === "page.interaction" || message.type === "page.diagnostic") return recordEvent(message, sender);
     if (message.type.startsWith("page.")) {
       const session = await read(SESSION_KEY);
       const result = await read(RESULT_KEY);

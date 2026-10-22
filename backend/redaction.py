@@ -35,6 +35,19 @@ _URL_SECRET_PATTERNS = [
     re.compile(r"secret|token|key|pass|cred|auth|cookie|session", re.IGNORECASE),
 ]
 
+# Page-failure channels. This mirrors the extension's DIAGNOSTIC_KINDS set
+# exactly; a new kind needs a matching change in the extension and a
+# redaction-parity update.
+DIAGNOSTIC_KINDS = {
+    "uncaught_exception",
+    "unhandled_rejection",
+    "http_error",
+    "resource_error",
+}
+MAX_DIAGNOSTIC_MESSAGE = 300
+MAX_DIAGNOSTIC_SOURCE = 1000
+MAX_DIAGNOSTIC_POSITION = 1000000
+
 
 def sanitize_url(value: Any) -> str:
     """Keep page identity without credentials, query secrets or arbitrary hashes."""
@@ -119,6 +132,52 @@ def _event_timestamp(value: Any) -> int:
     return int(time.time() * 1000)
 
 
+def sanitize_diagnostic(payload: Any, timestamp: int) -> Any:
+    """Retain a page-reported failure from an allowlist of fields.
+
+    A failure is what the page itself reported. The message is the page's own
+    error text, so it is treated as untrusted data: scrubbed for common secret
+    shapes and bounded. The location is a URL and is sanitized like every other
+    captured URL. Nothing here reads page body text or typed values.
+    """
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("diagnostic")
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("kind")
+    if not isinstance(kind, str) or kind not in DIAGNOSTIC_KINDS:
+        return None
+    diagnostic: dict[str, Any] = {"kind": kind}
+    message = raw.get("message")
+    if isinstance(message, str):
+        cleaned = sanitize_text(message, MAX_DIAGNOSTIC_MESSAGE)
+        if cleaned.strip():
+            diagnostic["message"] = cleaned
+    source = raw.get("source")
+    if isinstance(source, str):
+        cleaned = sanitize_url(source[:MAX_DIAGNOSTIC_SOURCE])
+        if cleaned:
+            diagnostic["source"] = cleaned
+    status = raw.get("status")
+    if kind == "http_error":
+        # An HTTP failure without a readable status is not an HTTP failure.
+        # The status is what makes the record meaningful, so it is required.
+        if not isinstance(status, int) or isinstance(status, bool) or not 400 <= status <= 599:
+            return None
+        diagnostic["status"] = status
+    if kind == "uncaught_exception":
+        for key in ("line", "column"):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_DIAGNOSTIC_POSITION:
+                diagnostic[key] = value
+    # A record with nothing to show is not evidence; drop it rather than
+    # delivering an empty line to a reviewer.
+    if not diagnostic.get("message") and not diagnostic.get("source") and "status" not in diagnostic:
+        return None
+    return {"type": "diagnostic", "ts": timestamp, "url": sanitize_url(payload.get("url")), "diagnostic": diagnostic}
+
+
 def sanitize_capture_event(payload: Any) -> Any:
     """Retain semantic interactions only; never typed keys, values or page text.
 
@@ -126,7 +185,11 @@ def sanitize_capture_event(payload: Any) -> Any:
     extension would have sent one, and page text is never read from a
     ``text`` field, because the extension never sends one.
     """
-    if not isinstance(payload, dict) or payload.get("type") not in ("click", "change", "submit", "navigation"):
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") == "diagnostic":
+        return sanitize_diagnostic(payload, _event_timestamp(payload.get("ts")))
+    if payload.get("type") not in ("click", "change", "submit", "navigation"):
         return None
     event = {
         "type": payload["type"],

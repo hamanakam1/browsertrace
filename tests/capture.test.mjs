@@ -54,7 +54,9 @@ function fixture(options = {}) {
     turnOn() { powerOn = true; controller.unlock(); },
     send(type, values = {}, sender = control) { return controller.message({ type, ...values }, sender); },
     start(values = {}) { return this.send("extension.startRecording", { tabId: 7, consent: true, ...values }); },
-    event(values = {}, sender = page) { return this.send("page.interaction", { sessionId: data[SESSION_KEY]?.sessionId, payload: { type: "click", url: activeTab.url, target: { tag: "button", label: "Save" }, ...values } }, sender); }
+    event(values = {}, sender = page) { return this.send("page.interaction", { sessionId: data[SESSION_KEY]?.sessionId, payload: { type: "click", url: activeTab.url, target: { tag: "button", label: "Save" }, ...values } }, sender); },
+    contentInjections() { return calls.inject.filter((call) => Array.isArray(call.files)); },
+    mainWorldInjections() { return calls.inject.filter((call) => call.world === "MAIN"); }
   };
 }
 
@@ -62,7 +64,7 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
-    assert.equal(manifest.version, "1.5.0");
+    assert.equal(manifest.version, "1.6.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -189,11 +191,49 @@ test("popup tabId works without sender.tab and only the top frame is injected", 
   const f = fixture();
   const result = await f.start({ goal: "Make filtering clearer" });
   assert.equal(result.status, "recording");
-  assert.deepEqual(f.calls.inject[0], { target: { tabId: 7, frameIds: [0] }, files: ["content/content.js"] });
+  // The content script and the main-world failure relay both target only the
+  // top frame of the chosen tab, and the relay carries the session nonce.
+  assert.equal(f.contentInjections().length, 1);
+  assert.deepEqual(f.contentInjections()[0], { target: { tabId: 7, frameIds: [0] }, files: ["content/content.js"] });
+  assert.equal(f.mainWorldInjections().length, 1);
+  assert.deepEqual(f.mainWorldInjections()[0].target, { tabId: 7, frameIds: [0] });
+  assert.deepEqual(f.mainWorldInjections()[0].args, [f.data[SESSION_KEY].diagnosticNonce]);
   assert.equal(f.data[SESSION_KEY].url, "https://app.test/dashboard#work-board");
   assert.equal(f.data[SESSION_KEY].goal, "Make filtering clearer");
   assert.equal(f.data[SESSION_KEY].screenshotConsent, false);
   assert.ok(f.calls.badges.some((value) => value.text === "REC"));
+});
+
+test("page failures join the capture timeline only for the active consented session", async () => {
+  const f = fixture();
+  await f.start();
+  const id = f.data[SESSION_KEY].sessionId;
+  const accepted = await f.send("page.diagnostic", { sessionId: id, payload: {
+    type: "diagnostic",
+    diagnostic: { kind: "http_error", message: "A request returned HTTP 500", source: "https://app.test/api/tickets?token=private", status: 500, private: "never" }
+  } }, page);
+  assert.equal(accepted.ok, true);
+  const event = f.data[SESSION_KEY].events.at(-1);
+  assert.equal(event.type, "diagnostic");
+  assert.equal(event.diagnostic.kind, "http_error");
+  assert.equal(event.diagnostic.status, 500);
+  assert.equal(event.diagnostic.source, "https://app.test/api/tickets");
+  assert.doesNotMatch(JSON.stringify(event), /private|never/);
+  // Another session, another tab, another frame and another origin are refused.
+  for (const sender of [{ ...page, tab: { id: 8 } }, { ...page, frameId: 1 }, { ...page, url: "https://other.test" }, { ...page, id: "other-extension" }]) {
+    assert.equal((await f.send("page.diagnostic", { sessionId: id, payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, sender)).ignored, true);
+  }
+  assert.equal((await f.send("page.diagnostic", { sessionId: "stale-session", payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, page)).ignored, true);
+  assert.equal(f.data[SESSION_KEY].events.length, 1);
+});
+
+test("a stopped or unconsented capture refuses page failures", async () => {
+  const f = fixture();
+  await f.start();
+  const id = f.data[SESSION_KEY].sessionId;
+  await f.send("extension.stopRecording", {}, monitor);
+  const refused = await f.send("page.diagnostic", { sessionId: id, payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, page);
+  assert.equal(refused.ignored, true);
 });
 
 test("page senders cannot invoke extension controls or impersonate another tab/frame/origin", async () => {
@@ -408,7 +448,7 @@ test("same-origin reload reinjects but cross-origin navigation stops and saves",
   const f = fixture();
   await f.start();
   await f.controller.tabUpdated(7, { status: "complete" }, { url: "https://app.test/other" });
-  assert.equal(f.calls.inject.length, 2);
+  assert.equal(f.contentInjections().length, 2);
   await f.controller.tabUpdated(7, { url: "https://other.test" }, { url: "https://other.test" });
   assert.equal(f.data[SESSION_KEY], undefined);
   assert.equal(JSON.parse(f.calls.fetch[0].init.body).stopReason, "left_origin");
@@ -454,7 +494,7 @@ test("browser-session marker prevents restored tab events from resuming capture 
   const result = await f.send("extension.getStatus");
   assert.equal(result.status, "pending");
   assert.equal(result.session.stopReason, "browser_or_extension_restarted");
-  assert.equal(f.calls.inject.length, 1);
+  assert.equal(f.contentInjections().length, 1);
   assert.equal(f.calls.fetch.length, 0);
   assert.equal(f.data[SESSION_KEY].events.length, 1);
 });
@@ -772,7 +812,7 @@ test("Off freezes active capture without upload, retains events, clears consent 
   assert.equal((await f.send("page.stop", { sessionId: id }, page)).ignored, true);
   assert.equal((await f.send("page.getStatus", {}, page)).status, "pending");
   await f.controller.tabUpdated(7, { status: "complete" }, f.activeTab);
-  assert.equal(f.calls.inject.length, 1);
+  assert.equal(f.contentInjections().length, 1);
   f.turnOn(); await f.send("extension.getStatus");
   await f.controller.alarm(AUTOMATION_ALARM);
   assert.equal(f.calls.fetch.length, 0);

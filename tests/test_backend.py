@@ -214,6 +214,24 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(tickets.load_tickets(rid)["data"], evidence)
         self.assertEqual(tickets.load_tickets(rid, mode="ai")["data"], ai)
 
+    def test_a_regenerated_draft_keeps_the_fields_a_reviewer_changed(self):
+        rid = self.create()
+        recording = storage.get_recording(rid)
+        # A draft stored by an earlier generation revision.
+        legacy = tickets.generate_drafts(recording, [])
+        legacy["generation_revision"] = tickets.GENERATION_REVISION - 1
+        legacy["tickets"][0]["title"] = "Reviewed title that must survive"
+        legacy["tickets"][0]["reviewed"] = {"title": "Reviewed title that must survive"}
+        tickets.save_tickets(rid, legacy)
+        # The stale draft is not served for regeneration.
+        self.assertIsNone(tickets.load_tickets(rid, mode="observed"))
+        regenerated = tickets.generate_drafts(recording, [])
+        tickets.save_tickets(rid, regenerated)
+        saved = tickets.load_tickets(rid, mode="observed")
+        self.assertEqual(saved["data"]["tickets"][0]["title"], "Reviewed title that must survive")
+        # A field nobody reviewed is not pinned to the older draft.
+        self.assertEqual(saved["data"]["tickets"][0]["evidence"], regenerated["tickets"][0]["evidence"])
+
     def test_old_ai_generation_is_not_reused_but_file_is_preserved(self):
         rid = self.create()
         legacy = {"mode": "ai", "tickets": [{"id": "old-draft", "title": "Unsupported claim"}]}
@@ -270,7 +288,7 @@ class DraftTests(unittest.TestCase):
         with patch.object(tickets, "_ollama_decompose", return_value=json.dumps(model)):
             result = tickets.generate_drafts(self.recording, self.events, use_ai=True)
         draft = result["tickets"][0]
-        self.assertEqual(result["generation_revision"], 2)
+        self.assertEqual(result["generation_revision"], tickets.GENERATION_REVISION)
         self.assertEqual(draft["steps_to_reproduce"], ["click: Save"])
         self.assertIn("do not establish a bug", draft["evidence"])
         self.assertNotIn("data loss", draft["evidence"])
@@ -324,6 +342,94 @@ class DraftTests(unittest.TestCase):
         draft = tickets.generate_drafts(self.recording, self.events)["tickets"][0]
         self.assertEqual(draft["evidence"], "1 recorded event; no AI inference was performed.")
         self.assertFalse(draft["provenance"]["events_truncated"])
+
+
+class DiagnosticsTests(unittest.TestCase):
+    """Page-reported failures are observations, and they stay observations."""
+
+    recording = {"id": "diagnostic-recording", "start_time": 1000, "url": "http://localhost:8080/page",
+                 "goal": "Fix the Save button", "title": "Dashboard", "video_path": ""}
+    events = [
+        {"type": "click", "ts": 1001500, "target": {"tag": "button", "label": "Save"}},
+        {"type": "diagnostic", "ts": 1001800, "url": "http://localhost:8080/page",
+         "diagnostic": {"kind": "uncaught_exception", "message": "TypeError: x is not a function",
+                        "source": "http://localhost:8080/app.js", "line": 12}},
+        {"type": "diagnostic", "ts": 1001900, "url": "http://localhost:8080/page",
+         "diagnostic": {"kind": "http_error", "message": "A request returned HTTP 500",
+                        "source": "http://localhost:8080/api/tickets", "status": 500}},
+    ]
+
+    def test_an_evidence_draft_names_the_failure_without_claiming_a_defect(self):
+        result = tickets.generate_drafts(self.recording, self.events)
+        draft = result["tickets"][0]
+        self.assertEqual(len(draft["diagnostics"]), 2)
+        self.assertEqual(draft["diagnostics"][0]["kind"], "uncaught_exception")
+        self.assertEqual(draft["diagnostics"][0]["event_index"], 2)
+        self.assertEqual(draft["diagnostics"][1]["status"], 500)
+        self.assertIn("Page-reported failures", draft["description"])
+        self.assertIn("TypeError: x is not a function", draft["description"])
+        self.assertIn("not verified defects", draft["description"])
+        self.assertIn("The page reported 2 failure(s)", draft["evidence"])
+        self.assertEqual(draft["provenance"]["diagnostic_count"], 2)
+        # The failure is an observation, never a verified defect or a permission.
+        self.assertFalse(draft["provenance"]["proposal_verified"])
+        self.assertFalse(draft["execution_authorized"])
+        self.assertTrue(draft["requires_review"])
+
+    def test_a_failure_becomes_a_readable_reproduction_step(self):
+        result = tickets.generate_drafts(self.recording, self.events)
+        steps = result["tickets"][0]["steps_to_reproduce"]
+        self.assertEqual(steps[0], "click: Save")
+        self.assertTrue(steps[1].startswith("page failure: uncaught exception: TypeError"))
+        self.assertIn("HTTP 500", steps[2])
+
+    def test_a_model_proposal_receives_the_failures_but_keeps_them_separate(self):
+        captured = {}
+
+        def fake_decompose(frames, events_summary, goal="", failures_summary=""):
+            captured["failures"] = failures_summary
+            captured["events"] = events_summary
+            return json.dumps([{"title": "Save fails", "description": "Unverified model claim",
+                                "event_indices": [1, 2]}])
+
+        with patch.object(tickets, "_ollama_decompose", side_effect=fake_decompose):
+            result = tickets.generate_drafts(self.recording, self.events, use_ai=True)
+        self.assertIn("TypeError: x is not a function", captured["failures"])
+        self.assertIn("HTTP 500", captured["failures"])
+        draft = result["tickets"][0]
+        self.assertEqual(draft["hypothesis"], "Unverified model claim")
+        self.assertIn("Unverified AI proposal:", draft["description"])
+        self.assertIn("Page-reported failures", draft["description"])
+        self.assertIn("do not establish a bug", draft["evidence"])
+        self.assertIn("The page reported 1 failure(s)", draft["evidence"])
+        # Only the failure the proposal's own evidence points at is attached.
+        self.assertEqual(len(draft["diagnostics"]), 1)
+        self.assertEqual(draft["diagnostics"][0]["event_index"], 2)
+
+    def test_a_capture_without_failures_reports_none(self):
+        report = tickets.capture_diagnostics([{"type": "click", "ts": 1, "target": {"tag": "button"}}])
+        self.assertEqual(report["count"], 0)
+        self.assertEqual(report["failures"], [])
+        self.assertEqual(report["kinds"], {})
+        self.assertIn("not verified defects", report["interpretation"])
+
+    def test_the_diagnostic_summary_states_what_a_failure_is_and_is_not(self):
+        report = tickets.capture_diagnostics(self.events)
+        self.assertEqual(report["count"], 2)
+        self.assertEqual(report["kinds"], {"uncaught_exception": 1, "http_error": 1})
+        self.assertIn("not verified defects", report["interpretation"])
+        self.assertIn("not permission to act", report["interpretation"])
+        self.assertTrue(report["failures"][0]["summary"].startswith("uncaught exception:"))
+        self.assertTrue(report["failures"][1]["summary"].startswith("HTTP 500"))
+
+    def test_a_diagnostic_is_redacted_like_any_other_captured_value(self):
+        event = {"type": "diagnostic", "ts": 1, "url": "http://localhost:8080/page",
+                 "diagnostic": {"kind": "http_error", "message": "failed for user@example.test",
+                                "source": "http://localhost:8080/api?token=secret", "status": 500}}
+        clean = redaction.sanitize_capture_event(event)
+        self.assertNotIn("user@example.test", clean["diagnostic"]["message"])
+        self.assertNotIn("secret", clean["diagnostic"]["source"])
+        self.assertEqual(clean["diagnostic"]["status"], 500)
 
 
 class PrivacyTests(unittest.TestCase):
