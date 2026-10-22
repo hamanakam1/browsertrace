@@ -728,7 +728,7 @@ to the destination, and the destination is told so in the ticket itself.
 {
   "ok": true,
   "target": "ticket-service",
-  "target_url": "http://127.0.0.1:7878",
+  "target_url": "http://127.0.0.1:8080",
   "payload": {
     "seed_key": "f9dbe3c73be57d949e37aedab387f895:observed:1",
     "source": "panther-intent-capture",
@@ -779,9 +779,9 @@ identity, the title, the detail, the backlog status, and the fences:
   "previously_verified": false,
   "verified_at": "2026-10-22T05:41:07Z",
   "ticket_key": "M-12345",
-  "ticket_url": "http://127.0.0.1:7878/?ticket=M-12345&view=full",
+  "ticket_url": "http://127.0.0.1:8080/?ticket=M-12345&view=full",
   "receipt": {
-    "target": "http://127.0.0.1:7878",
+    "target": "http://127.0.0.1:8080",
     "seed_key": "f9dbe3c73be57d949e37aedab387f895:observed:1",
     "payload_hash": "8b1c…",
     "state": "delivered",
@@ -930,7 +930,7 @@ durable copy.
   "url": "http://127.0.0.1:7890/ui/options/options.html",
   "title": "Panther Intent Capture",
   "goal": "Applying a promo code at checkout should not discard the entered code",
-  "extensionId": "hfbchpemcfpjpoolfjdjbaeccjhmihgj",
+  "extensionId": "<your-extension-id>",
   "screenshotConsent": false,
   "events": [],
   "screenshots": [],
@@ -1225,7 +1225,7 @@ somewhere else. The local ticket service is the reference implementation, in
 {
   "ok": true,
   "target": "ticket-service",
-  "target_url": "http://127.0.0.1:7878",
+  "target_url": "http://127.0.0.1:8080",
   "payload": { "…": "the exact ticket body" },
   "seed_key": "{recording}:{mode}:{index}",
   "payload_hash": "…",

@@ -75,32 +75,68 @@ EXTENSION_BROWSERS = (
 )
 
 
+def browser_reaches_http(browser_path: str) -> bool:
+    """Check that the browser can actually load an http URL.
+
+    Some Chromium builds cannot open a loopback address in a restricted
+    environment, and the failure looks like a hang rather than an error. A
+    browser that cannot reach the backend cannot capture a page, so the
+    script checks before it spends a capture on it.
+    """
+    browser = cdp.launch(browser_path)
+    try:
+        page = browser.new_page("about:blank")
+        try:
+            page.evaluate('location.href = "http://127.0.0.1:9/"', await_promise=False)
+        except cdp.CDPError:
+            pass
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            for target in browser.targets():
+                if target.get("type") == "page" and target.get("url", "").startswith("http://"):
+                    return True
+            time.sleep(0.2)
+        return False
+    finally:
+        browser.close()
+
+
 def find_browser() -> str:
     """Find a Chromium-family browser that can load the unpacked extension."""
-    candidates: list[Path] = []
+    import glob
+
+    candidates: list[str] = []
     playwright_root = Path.home() / "Library/Caches/ms-playwright"
-    if playwright_root.is_dir():
-        for build in sorted(playwright_root.glob("chromium-*/chrome-mac*")):
-            candidates.append(
-                build
-                / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-            )
+    candidates.extend(
+        sorted(
+            glob.glob(
+                str(playwright_root / "chromium-*/chrome-mac*/Google Chrome for Testing.app"
+                                       "/Contents/MacOS/Google Chrome for Testing")
+            ),
+            reverse=True,
+        )
+    )
     candidates.extend(
         [
-            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
-            Path("/Applications/Chromium.app/Contents/MacOS/Chromium"),
-            Path("/usr/bin/chromium"),
-            Path("/usr/bin/chromium-browser"),
-            Path("/usr/bin/google-chrome"),
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
         ]
     )
     for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+        path = Path(candidate)
+        if not (path.is_file() and os.access(path, os.X_OK)):
+            continue
+        if not browser_reaches_http(candidate):
+            print(f"  skip    : {path.name} cannot load an http URL in this environment")
+            continue
+        return str(path)
     raise SystemExit(
-        "no Chromium-family browser found. Chrome for Testing or Chromium can load an "
-        "unpacked extension; a branded Chrome newer than 136 refuses the switch."
+        "no usable Chromium-family browser found. Chrome for Testing or Chromium can load "
+        "an unpacked extension; a branded Chrome newer than 136 refuses the switch."
     )
 
 
@@ -326,26 +362,45 @@ def main(argv: list[str] | None = None) -> int:
             ("synthetic page", site.url()),
             ("backend page", f"http://127.0.0.1:{BACKEND_PORT}/ui/options/options.html"),
         ):
-            target = browser.new_page(url)
+            before = popup.evaluate(
+                "chrome.tabs.query({}).then(tabs => tabs.map(t => ({id: t.id, windowId: t.windowId})))"
+            ) or []
+            target = browser.new_page("about:blank")
             target.set_viewport(1000, 800)
+            # The tab is opened blank and then navigated: some browsers ignore
+            # the URL passed to the DevTools endpoint.
+            target.navigate(url)
             target.wait_for("document.readyState === 'complete'", timeout=15)
-            tab_id = popup.evaluate(
-                "chrome.tabs.query({}).then(tabs => tabs.filter(t => (t.url || '').startsWith(%s))"
-                ".map(t => t.id)[0] ?? null)" % json.dumps(url)
-            )
-            if tab_id is None:
-                print(
-                    "  tabs    :",
-                    popup.evaluate("chrome.tabs.query({}).then(t => t.map(x => x.url))"),
-                )
+            # Focus the page: the extension only captures the active tab of
+            # the focused window, and a tab's URL is not readable for every
+            # origin, so the tab is identified by what changed.
+            target.call("Page.bringToFront")
+            time.sleep(0.6)
+            after = popup.evaluate(
+                "chrome.tabs.query({}).then(tabs => tabs.map(t => ({id: t.id, windowId: t.windowId})))"
+            ) or []
+            before_ids = {tab["id"] for tab in (before or [])}
+            opened = [tab for tab in after if tab["id"] not in before_ids]
+            if not opened:
+                print("  tabs    :", after)
                 target.close()
                 continue
-            popup.evaluate(f"chrome.tabs.update({tab_id}, {{active: true}})")
-            time.sleep(0.4)
+            tab = opened[-1]
+            # The extension only captures the active tab of the focused window,
+            # so the window is focused and the tab activated from inside the
+            # extension, exactly as a person clicking the toolbar would.
+            focused = popup.evaluate(
+                "chrome.windows.update(%d, {focused: true})"
+                ".then(() => chrome.tabs.update(%d, {active: true}))"
+                ".then(() => JSON.stringify({tab: %d, window: %d}))"
+                % (tab["windowId"], tab["id"], tab["id"], tab["windowId"])
+            )
+            print(f"  focused : {focused}")
+            time.sleep(0.8)
             started = popup.evaluate(
                 "chrome.runtime.sendMessage({type: 'extension.startRecording', tabId: %d, consent: true,"
                 " goal: 'Applying a promo code at checkout should not discard the entered code',"
-                " screenshots: false}).then(r => JSON.stringify(r))" % tab_id
+                " screenshots: false}).then(r => JSON.stringify(r))" % tab["id"]
             )
             print(f"  start ({label}): {str(started)[:220]}")
             if '"ok":true' in str(started):
@@ -390,7 +445,8 @@ def main(argv: list[str] | None = None) -> int:
         shoot(options, "options-review.png", full_page=True)
 
         # 8. The documentation site.
-        site_page = browser.new_page((REPO / "docs" / "index.html").as_uri())
+        site_page = browser.new_page("about:blank")
+        site_page.navigate((REPO / "docs" / "index.html").as_uri())
         site_page.set_viewport(1280, 900)
         site_page.wait_for("document.readyState === 'complete'", timeout=20)
         time.sleep(0.8)

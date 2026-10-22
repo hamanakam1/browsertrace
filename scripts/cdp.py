@@ -47,15 +47,37 @@ class Browser:
     def new_page(self, url: str = "about:blank") -> "Page":
         """Open a new tab and return a client for it.
 
-        The DevTools endpoint answers ``/json/new`` with a PUT; a GET is
-        refused as a cross-site request.
+        The tab is created through the browser-level DevTools session, which
+        is the only way that reliably applies the URL: the HTTP endpoint
+        creates a blank tab in some builds.
         """
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/json/new?{url}", method="PUT"
+        version = json.loads(
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/json/version", timeout=5
+            ).read().decode()
         )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            target = json.loads(response.read().decode())
-        return Page(self.port, target["webSocketDebuggerUrl"])
+        browser_socket = _WebSocket(version["webSocketDebuggerUrl"])
+        try:
+            browser_socket.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "Target.createTarget",
+                        "params": {"url": url},
+                    }
+                )
+            )
+            while True:
+                message = json.loads(browser_socket.recv())
+                if message.get("id") == 1:
+                    target_id = message["result"]["targetId"]
+                    break
+        finally:
+            browser_socket.close()
+        for target in self.targets():
+            if target.get("id") == target_id:
+                return Page(self.port, target["webSocketDebuggerUrl"])
+        raise CDPError(f"the browser did not report the new target {target_id}")
 
     def close(self) -> None:
         """Stop the browser and remove its profile."""

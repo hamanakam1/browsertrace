@@ -39,7 +39,7 @@ ARCHIFY_CANDIDATES = (
 )
 
 BROWSERS = (
-    "~/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     "/usr/bin/chromium",
@@ -59,10 +59,13 @@ def find_archify() -> Path | None:
 
 def find_browser() -> str | None:
     """Locate a browser that can rasterise the diagram."""
-    for candidate in BROWSERS:
-        path = Path(os.path.expanduser(candidate))
-        if path.is_file() and os.access(path, os.X_OK):
-            return str(path)
+    import glob
+
+    for pattern in BROWSERS:
+        for candidate in sorted(glob.glob(os.path.expanduser(pattern)), reverse=True):
+            path = Path(candidate)
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
     return None
 
 
