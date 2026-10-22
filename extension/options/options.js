@@ -134,6 +134,34 @@ function element(tag, text, className = "") {
   node.textContent = text; node.className = className;
   return node;
 }
+/** Describe one page-reported failure in a single line. */
+function failureLine(diagnostic) {
+  if (!diagnostic) return "";
+  if (diagnostic.kind === "http_error") return `HTTP ${diagnostic.status || "?"}${diagnostic.source ? " " + diagnostic.source : ""}`;
+  if (diagnostic.kind === "uncaught_exception") return `${diagnostic.message || "uncaught exception"}${diagnostic.source ? " (" + diagnostic.source + ")" : ""}`;
+  if (diagnostic.kind === "unhandled_rejection") return diagnostic.message || "unhandled rejection";
+  return `resource failed to load${diagnostic.source ? " " + diagnostic.source : ""}`;
+}
+/** Render the failures the page itself reported during this capture. */
+async function renderDiagnostics(id, version) {
+  $("diagnosticsPanel").hidden = true;
+  $("diagnostics").replaceChildren();
+  $("diagnosticNotice").textContent = "";
+  try {
+    const report = await api("recordings/" + id + "/diagnostics");
+    if (version !== requestVersion || selected?.id !== id) return;
+    if (!report.count) return;
+    $("diagnosticsPanel").hidden = false;
+    $("diagnosticNotice").textContent = report.interpretation;
+    for (const failure of report.failures || []) {
+      $("diagnostics").append(element("li", failure.summary || failureLine(failure)));
+    }
+  } catch (error) {
+    if (version !== requestVersion || selected?.id !== id) return;
+    $("diagnosticsPanel").hidden = false;
+    $("diagnosticNotice").textContent = "Page-reported failures are unavailable: " + error.message;
+  }
+}
 async function refresh() {
   try {
     const health = await api("health");
@@ -179,12 +207,15 @@ async function openCapture(id) {
   $("captureGoal").textContent = capture.goal ? "Your intent: " + capture.goal : "No intended outcome was supplied. Add the expected result to the draft.";
   $("events").replaceChildren();
   for (const event of evidence.events) {
+    const failure = event.type === "diagnostic" ? event.diagnostic : null;
     $("events").append(element("li", [
-      event.type, event.target?.tag, event.target?.label || event.target?.text || event.target?.ariaLabel || "",
+      event.type, failure ? failureLine(failure) : event.target?.tag,
+      failure ? "" : event.target?.label || event.target?.text || event.target?.ariaLabel || "",
       event.url || event.page?.url || "", event.target?.dataTab ? "tab: " + event.target.dataTab : "",
       event.target?.dataTicket ? "ticket: " + event.target.dataTicket : ""
     ].filter(Boolean).join(" · ")));
   }
+  renderDiagnostics(id, version);
   $("screenshots").replaceChildren();
   $("screenshotPrivacyNotice").hidden = true;
   $("screenshotPrivacyNotice").textContent = "";
@@ -254,6 +285,10 @@ function renderTickets(data, recordingId = selected.id) {
       fields[key] = input; card.append(fieldLabel, input);
     }
     card.append(element("pre", "Observed steps:\n" + (ticket.steps_to_reproduce || []).map((s,i) => (i + 1) + ". " + s).join("\n")));
+    if ((ticket.diagnostics || []).length) {
+      card.append(element("p", "Page-reported failures (observations, not verified defects): "
+        + ticket.diagnostics.map(failureLine).join("; "), "muted"));
+    }
     card.append(element("p", ticket.evidence || "", "muted"));
     const actions = element("div", "", "actions");
     const patch = () => ({title: fields.title.value.trim(), description: fields.description.value.trim(), acceptance_criteria: fields.acceptance_criteria.value.split("\n").map(x => x.trim()).filter(Boolean)});

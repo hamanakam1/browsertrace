@@ -16,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import storage
 import automation
+import integrations
 from api import routes
 from server import Handler
 from tickets import DraftGenerationError
@@ -108,12 +109,49 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(code, 200, delivered)
             submit.assert_called_once()
 
+    def test_page_reported_failures_are_readable_and_never_verified(self):
+        capture = {**self.capture, "events": [
+            {"type": "click", "ts": 1700000001000, "target": {"tag": "button", "label": "Save"}},
+            {"type": "diagnostic", "ts": 1700000001200, "url": "http://127.0.0.1:8080/page",
+             "diagnostic": {"kind": "http_error", "message": "A request returned HTTP 500",
+                            "source": "http://127.0.0.1:8080/api/tickets?token=secret", "status": 500}},
+            {"type": "diagnostic", "ts": 1700000001300, "url": "http://127.0.0.1:8080/page",
+             "diagnostic": {"kind": "uncaught_exception", "message": "TypeError: x is not a function",
+                            "source": "http://127.0.0.1:8080/app.js", "line": 12}},
+        ]}
+        code, receipt, _ = self.request("/api/extension/record", capture)
+        self.assertEqual(code, 201, receipt)
+        rid = receipt["id"]
+        code, record, _ = self.request(f"/api/extension/recordings/{rid}")
+        self.assertEqual(record["diagnostic_count"], 2)
+        code, report, _ = self.request(f"/api/extension/recordings/{rid}/diagnostics")
+        self.assertEqual(code, 200, report)
+        self.assertEqual(report["count"], 2)
+        self.assertEqual(report["kinds"], {"http_error": 1, "uncaught_exception": 1})
+        self.assertIn("HTTP 500", report["failures"][0]["summary"])
+        self.assertIn("not verified defects", report["interpretation"])
+        self.assertNotIn("secret", json.dumps(report))
+        code, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+        self.assertEqual(code, 200, drafts)
+        draft = drafts["tickets"][0]
+        self.assertEqual(len(draft["diagnostics"]), 2)
+        self.assertIn("Page-reported failures", draft["description"])
+        self.assertNotIn("secret", json.dumps(draft))
+
     def test_parallel_uploads_share_one_receipt(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: self.request("/api/extension/record", self.capture), range(4)))
         self.assertEqual(len({data["id"] for _, data, _ in results}), 1)
         self.assertEqual(sorted(code for code, _, _ in results), [200, 200, 200, 201])
         self.assertEqual(len(storage.list_recordings()), 1)
+
+    def test_health_advertises_the_capabilities_and_the_export_contract_version(self):
+        code, health, _ = self.request("/api/extension/health")
+        self.assertEqual(code, 200)
+        self.assertEqual(health["status"], "ok")
+        self.assertIn("diagnostics", health["capabilities"])
+        self.assertEqual(health["bundle_schema_version"], integrations.SCHEMA_VERSION)
+        self.assertEqual(health["schema_version"], health["bundle_schema_version"])
 
     def test_consent_and_malformed_inputs_are_rejected(self):
         for changes in ({"consent": False}, {"events": {}}, {"sessionId": ""}, {"startTime": -1},

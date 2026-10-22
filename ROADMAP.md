@@ -8,6 +8,11 @@ The product goal is to make a user's observed workflow and desired change unders
 - Events-first capture with a floating status/control panel and popup recovery actions.
 - Persistent browser status window with runtime/activity separation, bounded status freshness, retained-history labeling, and independent Off controls. It opens on explicit On, not at login or browser startup.
 - Live numbered action feed, conservative rules-based interpretation and evidence-linked friction hypotheses; separately opted-in bounded local AI insights that never create tickets or execute work.
+- Page-reported failure capture: uncaught exceptions, unhandled promise rejections, HTTP error responses and failed subresources, recorded in the same ordered timeline as the interactions. Failures are observations of what the page said, never verified defects, and never permissions to act.
+- A bounded main-world relay that lets an isolated content script observe the page's own uncaught failures, with a per-session nonce, no extension privilege, and no page text, values or keystrokes.
+- Failures keep the time they actually happened, so the recorded timeline stays truthful; failures from before the capture began stay outside the consented window.
+- A "Page-reported failures" review section, per-draft failure summaries, and a local `GET /recordings/:id/diagnostics` route.
+- Regeneration that keeps the fields a reviewer already changed, so a new generation never discards a reviewer's decision.
 - Explicit browser On / Off with a native helper on macOS/Linux; no login service or automatic reconnect. Off cancels unfinished delivery and stops only the owned backend.
 - Allowlisted control metadata; no typed values or keystrokes; URL and common-secret sanitization.
 - Separately consented screenshots, bounded to five per session. Pixels remain unredacted.
@@ -35,6 +40,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 - Measure draft usefulness with representative examples: accurate evidence, clear expected behavior, useful acceptance criteria, and minimal manual correction.
 - Test an explicitly configured local model and report model/version, errors, latency, and whether any media was analyzed.
 - Establish a small, published compatibility matrix from actual website/browser checks.
+- Exercise a full user-consented capture of a page that fails, in a real browser, and record the result in the diagnostics report.
 
 ## Next: make integrations easier to extend
 
@@ -43,6 +49,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 - Add destination setup and capability discovery without exposing credentials to captured pages.
 - Provide deliberate update/link-existing workflows; resubmitting edited content must not silently overwrite an existing ticket.
 - Improve evidence transfer and attachments with separate consent, access control, and clear retention behavior.
+- Provide an importer for the version 1.1 intent bundle, including the `diagnostics` field, so another system can carry a page-reported failure through without presenting it as a verified defect.
 
 ## Next: stronger privacy and operational controls
 
@@ -51,6 +58,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 - Provide explicit receipt/history retention controls while explaining their effect on duplicate prevention.
 - Improve large-session coverage, event truncation disclosure, and cross-frame capture with explicit permission boundaries.
 - Qualify native-helper packaging across platforms, upgrades, custom profiles, and uninstall behavior while retaining explicit browser startup. Windows helper packaging remains unimplemented.
+- Consider dead-click and inert-target detection from the captured timeline, and a separately consented console channel, with the same "observation, not proof" framing.
 
 ## Deferred capabilities
 
