@@ -184,6 +184,7 @@ class IntegrationsTests(unittest.TestCase):
         self.assertEqual(receipts[0].stat().st_mode & 0o777, 0o600)
 
     def test_destination_change_rejects_previous_confirmation_before_network(self):
+        import destinations
         from api import routes
         preview = integrations.preview_ticket(self.recording, self.ticket)
         body = json.dumps({"ticket_id": self.ticket["id"], "confirmed": True,
@@ -210,7 +211,7 @@ class IntegrationsTests(unittest.TestCase):
         with patch.dict(os.environ, {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:1"}), \
                 patch.object(storage, "get_recording", return_value=self.recording), \
                 patch.object(routes, "_reviewed_ticket", return_value=self.ticket), \
-                patch.object(routes, "submit_ticket") as submit, \
+                patch.object(destinations, "submit") as submit, \
                 patch.object(integrations, "_request") as network:
             changed = integrations.preview_ticket(self.recording, self.ticket)
             self.assertNotEqual(changed["payload_hash"], preview["payload_hash"])
