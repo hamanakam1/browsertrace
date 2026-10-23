@@ -34,13 +34,21 @@ most stable handle it has, in this order:
 |---|---|---|
 | `test-id` | `data-ticket` or `data-tab` | `[data-ticket="M-4242"]` |
 | `id` | a plain, short element id | `#save-button` |
-| `role-name` | an ARIA role and an accessible name | `get_by_role("button", name="Save")` |
-| `text` | the visible text of a button or link | `get_by_text("Save")` |
+| `role-name` | an explicit ARIA role, or a native button's implicit role, and a captured name | `get_by_role("button", name="Save", exact=True)` |
+| `text` | the captured label when a role is unavailable | `get_by_text("Save", exact=True)` |
 | `href` | the target of a link | `a[href="https://example.test/settings"]` |
 | `none` | nothing stable was captured | — |
 
-A step with no stable handle is marked `replayable: false` and is left out of
-the rendered script. Panther does not guess.
+A step with no stable handle is marked `replayable: false` and adds no action
+to the rendered script. A non-replayable submit leaves a fixed review comment
+at its recorded position.
+
+Native buttons use their implicit `button` role when no explicit role was
+captured. This allows a label from `aria-label` to identify an icon button
+without visible text. Role names and text labels use exact matching, so a
+captured `Save` does not select `Save as`. The capture does not resolve every
+accessible-name source or establish uniqueness, so these handles still need
+review.
 
 Redaction placeholders such as `[EMAIL]` or `[REDACTED]` cannot identify a
 control. Panther skips handles containing these markers and tries the next
@@ -54,6 +62,17 @@ been truncated, including in the middle of a redaction marker.
 keystrokes, or page text, and that has not changed. A `change` step therefore
 records *that* a field changed, not what it became, and it is not replayable.
 A plan describes the path; it cannot reproduce the data.
+
+**A click and submit may describe the same interaction.** When a submit
+immediately follows a click in the action plan, Panther retains the submit
+step but marks it `replayable: false`. Diagnostics between the two events do
+not change this decision. The script leaves a review comment instead of
+calling `requestSubmit()` again, because the preceding click may already
+submit the form. This is a conservative review rule, not a claim that the
+click caused the submission. A submit without an immediately preceding click
+remains executable when it has a usable handle, including after a change or
+navigation step. Reviewers must check the form behavior and any missing data
+before running the proposal.
 
 Screenshots are not analyzed and are not part of a plan.
 

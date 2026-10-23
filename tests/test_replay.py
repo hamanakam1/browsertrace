@@ -3,7 +3,10 @@ import ast
 import json
 import sys
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import replay  # noqa: E402
@@ -36,6 +39,116 @@ EVENTS = [
 class ReplayPlanTests(unittest.TestCase):
     def plan(self):
         return replay.build_plan(dict(RECORDING), list(EVENTS))
+
+    def count_synthetic_submissions(self, script):
+        """Run only the generated flow against an in-memory browser double."""
+        submissions = []
+
+        class Locator:
+            def __init__(self, selector):
+                self.selector = selector
+
+            def click(self):
+                if self.selector == "#save":
+                    submissions.append("click")
+
+            def evaluate(self, expression):
+                if self.selector == "#save-form" and expression == "form => form.requestSubmit()":
+                    submissions.append("submit")
+
+        page = SimpleNamespace(goto=lambda url: None, locator=Locator)
+        browser = SimpleNamespace(new_page=lambda: page, close=lambda: None)
+        playwright = SimpleNamespace(chromium=SimpleNamespace(launch=lambda: browser))
+        module = SimpleNamespace(sync_playwright=lambda: nullcontext(playwright))
+        namespace = {"__name__": "synthetic_replay"}
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": module}):
+            exec(compile(script, "synthetic_replay.py", "exec"), namespace)
+            namespace["replay"]()
+        return len(submissions)
+
+    def test_click_followed_by_submit_does_not_submit_twice(self):
+        click = {"type": "click", "target": {"tag": "button", "id": "save", "type": "submit"}}
+        submit = {"type": "submit", "target": {"tag": "form", "id": "save-form"}}
+        diagnostic = {"type": "diagnostic", "diagnostic": {"kind": "console_error", "message": "Synthetic"}}
+        for between in ([], [diagnostic]):
+            with self.subTest(diagnostics=bool(between)):
+                plan = replay.build_plan(dict(RECORDING), sanitize_events([click, *between, submit]))
+                self.assertEqual(self.count_synthetic_submissions(replay.render_playwright(plan)), 1)
+                self.assertEqual([step["action"] for step in plan["steps"]], ["navigate", "click", "submit"])
+                self.assertFalse(plan["steps"][-1]["replayable"])
+                self.assertIn("may already", plan["steps"][-1]["note"])
+                self.assertEqual(plan["steps"][-1]["selector"]["value"], "save-form")
+
+    def test_standalone_submit_remains_executable(self):
+        submit = {"type": "submit", "target": {"tag": "form", "id": "save-form"}}
+        for preceding in (
+            [],
+            [{"type": "click", "target": {"tag": "button", "id": "open"}},
+             {"type": "change", "target": {"tag": "input", "id": "field"}}],
+            [{"type": "click", "target": {"tag": "button", "id": "open"}},
+             {"type": "navigation", "url": "https://example.test/form"}],
+        ):
+            with self.subTest(preceding=preceding):
+                plan = replay.build_plan(dict(RECORDING), sanitize_events([*preceding, submit]))
+                self.assertTrue(plan["steps"][-1]["replayable"])
+                self.assertEqual(self.count_synthetic_submissions(replay.render_playwright(plan)), 1)
+
+    def test_deferred_submit_has_a_fixed_review_comment_without_note_injection(self):
+        plan = replay.build_plan(dict(RECORDING), [
+            {"type": "click", "target": {"tag": "button", "id": "save"}},
+            {"type": "submit", "target": {"tag": "form", "id": "save-form"}},
+        ])
+        plan["steps"][-1]["note"] = "Untrusted note\nprint(123)\n#"
+        script = replay.render_playwright(plan)
+        review_comment = "# Review this recorded submission before adding an explicit submit action."
+        self.assertIn(review_comment, script)
+        self.assertLess(script.index('.click()'), script.index(review_comment))
+        self.assertLess(script.index(review_comment), script.index('browser.close()'))
+        self.assertNotIn("Untrusted note", script)
+        self.assertNotIn("requestSubmit", script)
+        tree = ast.parse(script)
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id == "print" for node in ast.walk(tree)))
+
+    def test_native_button_names_use_the_implicit_role(self):
+        for role_fields in ({}, {"role": ""}):
+            with self.subTest(role_fields=role_fields):
+                events = sanitize_events([{"type": "click", "target": {
+                    "tag": "button", "label": "Save", **role_fields,
+                }}])
+                plan = replay.build_plan(dict(RECORDING), events)
+                selector = plan["steps"][-1]["selector"]
+                self.assertEqual(selector["strategy"], "role-name")
+                self.assertEqual(selector["role"], "button")
+                self.assertEqual(selector["value"], "Save")
+
+    def test_native_role_inference_preserves_explicit_role_and_length_guard(self):
+        for raw_role, expected_role in (("tab", "tab"), ("button" + " " * 34, None), ("[REDACTED]", None)):
+            with self.subTest(raw_role=raw_role):
+                plan = replay.build_plan(dict(RECORDING), [{"type": "click", "target": {
+                    "tag": "button", "role": raw_role, "label": "Save",
+                }}])
+                self.assertEqual(plan["steps"][-1]["selector"]["role"], expected_role)
+
+    def test_name_and_text_locators_match_exact_literal_labels(self):
+        for target, locator_method in (
+            ({"tag": "button", "role": "button", "label": "Save"}, "get_by_role"),
+            ({"tag": "a", "label": "Save"}, "get_by_text"),
+            ({"tag": "button", "role": "button", "label": "Save\"'); print(123); #\n雪"}, "get_by_role"),
+        ):
+            with self.subTest(target=target):
+                plan = replay.build_plan(dict(RECORDING), [{"type": "click", "target": target}])
+                tree = ast.parse(replay.render_playwright(plan))
+                locators = [node for node in ast.walk(tree)
+                            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == locator_method]
+                self.assertEqual(len(locators), 1)
+                keywords = {keyword.arg: ast.literal_eval(keyword.value) for keyword in locators[0].keywords}
+                self.assertIs(keywords.get("exact"), True)
+                label = keywords["name"] if locator_method == "get_by_role" else ast.literal_eval(locators[0].args[0])
+                self.assertEqual(label, target["label"])
+                self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                                     and node.func.id == "print" for node in ast.walk(tree)))
 
     def test_the_plan_describes_the_recorded_path(self):
         plan = self.plan()

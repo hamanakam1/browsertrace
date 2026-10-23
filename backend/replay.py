@@ -62,12 +62,19 @@ def _selector(target: Dict[str, Any]) -> Dict[str, Any]:
     if _usable(identifier) and _STABLE_ID.fullmatch(identifier):
         return {"strategy": "id", "value": identifier, "attribute": "id", "role": None,
                 "css": f"#{identifier}", "replayable": True}
-    role = _text(target.get("role"), 40).lower()
+    raw_role = target.get("role")
+    role = _text(raw_role, 40).lower()
     label = _text(target.get("label"), MAX_LABEL)
     # Values at the capture limit may be truncated, including halfway through
     # a redaction marker. They cannot identify the original control reliably.
     label_usable = _usable(label) and len(target["label"]) < MAX_LABEL
-    role_usable = _usable(role) and len(target["role"]) < 40
+    role_usable = _usable(role) and len(raw_role) < 40
+    # Native buttons have an implicit role even without an explicit ARIA
+    # role. Their captured label may come from aria-label, not visible text.
+    # Do not replace an explicit role that was redacted or truncated.
+    if tag == "button" and (raw_role is None or raw_role == ""):
+        role = "button"
+        role_usable = True
     if role_usable and label_usable:
         return {"strategy": "role-name", "value": label, "attribute": None, "role": role,
                 "css": None, "replayable": True}
@@ -135,6 +142,13 @@ def build_plan(recording: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[
             step = _step(len(steps) + 1, "click", event)
         elif kind == "submit":
             step = _step(len(steps) + 1, "submit", event)
+            if steps and steps[-1]["action"] == "click":
+                # Both native events may describe one user action. The
+                # capture does not establish causality, so preserve the
+                # submission for review instead of risking a second write.
+                step["replayable"] = False
+                step["note"] = ("The preceding click may already trigger this submission. "
+                                "Review the recorded submit before adding an explicit submit action.")
         elif kind == "change":
             step = _step(len(steps) + 1, "change", event,
                          "The value of this field was never captured, so the step records that it changed, not what it became.")
@@ -182,9 +196,9 @@ def _playwright_locator(selector: Dict[str, Any]) -> Optional[str]:
         return f'page.locator({json.dumps(css)})'
     if strategy == "role-name" and value:
         role = selector.get("role") or "button"
-        return f"page.get_by_role({json.dumps(role)}, name={json.dumps(value)})"
+        return f"page.get_by_role({json.dumps(role)}, name={json.dumps(value)}, exact=True)"
     if strategy == "text" and value:
-        return f"page.get_by_text({json.dumps(value)})"
+        return f"page.get_by_text({json.dumps(value)}, exact=True)"
     if strategy == "href" and value:
         # Escape the CSS value first, then quote the complete Python argument.
         # Nesting a JSON string inside manually quoted Python lets an apostrophe
@@ -224,6 +238,10 @@ def render_playwright(plan: Dict[str, Any]) -> str:
             lines.append(f"        page.goto({json.dumps(step.get('url', ''))})")
             continue
         if not step.get("replayable"):
+            if action == "submit":
+                # Notes are untrusted captured data. Keep the source comment
+                # fixed so a line break in a note cannot introduce code.
+                lines.append("        # Review this recorded submission before adding an explicit submit action.")
             continue
         locator = _playwright_locator(step.get("selector") or {})
         if not locator:
