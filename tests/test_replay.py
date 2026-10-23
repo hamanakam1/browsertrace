@@ -1,4 +1,5 @@
 """Replay-plan contract tests: a proposal, never an execution."""
+import ast
 import json
 import sys
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import replay  # noqa: E402
 import tickets  # noqa: E402
+from redaction import sanitize_events  # noqa: E402
 
 RECORDING = {
     "id": "replay-capture-1", "url": "http://127.0.0.1:8080/work-board?token=secret",
@@ -106,6 +108,41 @@ class ReplayPlanTests(unittest.TestCase):
             {"type": "click", "ts": 1000500, "url": "http://127.0.0.1:8080/x", "target": {"tag": "div"}}])
         script = replay.render_playwright(plan)
         self.assertNotIn(".click()", script)
+
+    def test_href_selectors_remain_literal_data_in_the_generated_script(self):
+        for href in (
+            "https://example.test/it's",
+            "https://example.test/x'+str(print(123))+'",
+            'https://example.test/a"b\\c',
+            "https://example.test/\u96ea/\u2028/\x01",
+        ):
+            with self.subTest(href=href):
+                events = sanitize_events([{
+                    "type": "click", "target": {"tag": "a", "href": href},
+                }])
+                plan = replay.build_plan({"id": "synthetic-capture"}, events)
+                script = replay.render_playwright(plan)
+                tree = ast.parse(script)
+                locators = [node for node in ast.walk(tree)
+                            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == "locator"]
+                self.assertEqual(len(locators), 1)
+                self.assertIsInstance(locators[0].args[0], ast.Constant)
+                value = plan["steps"][0]["selector"]["value"]
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+                self.assertEqual(locators[0].args[0].value, f'a[href="{escaped}"]')
+                self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                                     and node.func.id == "print" for node in ast.walk(tree)))
+
+    def test_capture_identity_cannot_add_code_below_the_header_comment(self):
+        script = replay.render_playwright({
+            "recording": {"id": "synthetic\nprint(123)\n#"}, "steps": [],
+        })
+        tree = ast.parse(script)
+        self.assertEqual(len(tree.body), 3)
+        self.assertIsInstance(tree.body[0], ast.ImportFrom)
+        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id == "print" for node in ast.walk(tree)))
 
     def test_the_plan_is_bounded(self):
         events = [{"type": "click", "ts": 1000000 + index, "url": "http://127.0.0.1:8080/x",
