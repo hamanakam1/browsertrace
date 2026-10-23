@@ -43,6 +43,22 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(storage.get_recording(first)["goal"], "original")
         self.assertEqual(len(storage.list_recordings()), 1)
 
+    def test_recording_metadata_is_redacted_before_persistence(self):
+        rid = self.create(title="Account user@example.test Bearer synthetic-title-token",
+                          goal="Use token=synthetic-goal-secret for user@example.test")
+        record = storage.get_recording(rid)
+        self.assertEqual(record["title"], "Account [EMAIL] [REDACTED]")
+        self.assertEqual(record["goal"], "Use [REDACTED] for [EMAIL]")
+        persisted = storage.MANIFEST_FILE.read_text()
+        for value in ("user@example.test", "synthetic-title-token", "synthetic-goal-secret"):
+            self.assertNotIn(value, persisted)
+
+    def test_recording_metadata_keeps_existing_length_limits(self):
+        rid = self.create(title="ordinary title " * 40, goal="ordinary goal " * 200)
+        record = storage.get_recording(rid)
+        self.assertEqual(record["title"], ("ordinary title " * 40)[:300])
+        self.assertEqual(record["goal"], ("ordinary goal " * 200)[:2000])
+
     def test_threaded_creates_do_not_lose_records(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             ids = list(pool.map(lambda index: self.create(f"session-{index}"), range(32)))

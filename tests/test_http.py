@@ -111,6 +111,31 @@ class HttpTests(unittest.TestCase):
             submit.assert_called_once()
             self.assertEqual(submit.call_args.kwargs["expected_payload_hash"], preview["payload_hash"])
 
+    def test_direct_upload_redacts_metadata_in_storage_drafts_and_exports(self):
+        self.capture.update(title="Account user@example.test Bearer synthetic-title-token",
+                            goal="Use token=synthetic-goal-secret for user@example.test")
+        rid = self.record()
+        code, public, _ = self.request(f"/api/extension/recordings/{rid}")
+        self.assertEqual(code, 200, public)
+        code, library, _ = self.request("/api/extension/recordings")
+        self.assertEqual(code, 200, library)
+        code, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+        self.assertEqual(code, 200, drafts)
+        self.assertEqual(drafts["mode"], "observed")
+        code, exported, _ = self.request(f"/api/extension/export/{rid}")
+        self.assertEqual(code, 200, exported)
+        surfaces = {"manifest": storage.MANIFEST_FILE.read_text(), "public": public,
+                    "library": library, "drafts": drafts, "export": exported}
+        for name, surface in surfaces.items():
+            with self.subTest(surface=name):
+                serialized = json.dumps(surface)
+                for value in ("user@example.test", "synthetic-title-token", "synthetic-goal-secret"):
+                    self.assertNotIn(value, serialized)
+        self.assertEqual(public["title"], "Account [EMAIL] [REDACTED]")
+        self.assertEqual(public["goal"], "Use [REDACTED] for [EMAIL]")
+        self.assertEqual(exported["recording"]["stated_goal"], public["goal"])
+        self.assertFalse(exported["authority"]["execution_authorized"])
+
     def test_page_reported_failures_are_readable_and_never_verified(self):
         capture = {**self.capture, "events": [
             {"type": "click", "ts": 1700000001000, "target": {"tag": "button", "label": "Save"}},

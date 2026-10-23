@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from redaction import sanitize_url
+from redaction import sanitize_text, sanitize_url
 
 ROOT = Path(os.environ.get("PANTHER_DATA_DIR", str(Path.home() / ".panther-intent-capture"))).expanduser()
 RECORDINGS_DIR = ROOT / "recordings"
@@ -119,7 +119,8 @@ def create_recording(
             "extension_id": extension_id, "video_size": video_size,
             **{key: str(path) if path else "" for key, path in paths.items()},
             "created_at": time.time(), "inference": None,
-            "url": sanitize_url(url), "title": str(title)[:300], "goal": str(goal)[:2000],
+            "url": sanitize_url(url), "title": sanitize_text(str(title), 300),
+            "goal": sanitize_text(str(goal), 2000),
             "capture_mode": "video" if video_path else "events",
         }
         if metadata:
