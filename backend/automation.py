@@ -539,8 +539,14 @@ def _process(recording_id):
                 if (preview["target_url"] != job["policy"]["target_url"]
                         or preview["payload_hash"] != item["payload_hash"]):
                     raise ValueError("The frozen destination or proposal payload changed; fresh consent is required")
-                result = destinations.submit(kind, frozen["recording"], item["ticket"],
-                    before_send=lambda: _checkpoint(recording_id))
+            def authorize_send():
+                with storage.DATA_LOCK:
+                    _checkpoint(recording_id)
+
+            # Adapters can wait on their own submission lock and perform slow
+            # I/O. Keep cancellation accessible and avoid reversing lock order.
+            result = destinations.submit(kind, frozen["recording"], item["ticket"],
+                before_send=authorize_send, expected_payload_hash=item["payload_hash"])
             if not _record_result(recording_id, item["ticket"]["id"], result):
                 return
             if not result.get("ok") or result.get("verified") is not True:

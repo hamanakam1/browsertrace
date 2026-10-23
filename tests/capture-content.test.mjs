@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
+import { sanitizeCaptureEvent } from "../extension/shared/redaction.js";
 
 const script = await readFile(new URL("../extension/content/content.js", import.meta.url), "utf8");
 
@@ -293,4 +294,29 @@ test("page failures stop with capture and are bounded per session", () => {
   const before = f.failures().length;
   f.emitResource({ name: "http://127.0.0.1:8080/api/after", responseStatus: 500, initiatorType: "fetch" });
   assert.equal(f.failures().length, before);
+});
+
+test("diagnostic text reaches redaction before clipping and oversized messages are omitted", () => {
+  const f = fixture(); f.start();
+  for (const message of ["detail ".repeat(41) + "synthetic.person@example.test", "detail ".repeat(41) + "synthetic".repeat(8)]) {
+    for (const listener of f.listeners["panther-diagnostic"] || []) {
+      listener({ detail: { nonce: "nonce-1", kind: "uncaught_exception", message } });
+    }
+    const clean = sanitizeCaptureEvent(f.failures().at(-1).payload);
+    assert.doesNotMatch(clean.diagnostic.message, /synthetic/);
+    assert.ok(clean.diagnostic.message.length <= 300);
+  }
+  for (const listener of f.listeners["panther-diagnostic"] || []) {
+    listener({ detail: { nonce: "nonce-1", kind: "uncaught_exception", message: "synthetic".repeat(2000) } });
+  }
+  assert.doesNotMatch(JSON.stringify(f.failures().at(-1)), /synthetic/);
+  assert.match(f.failures().at(-1).payload.diagnostic.message, /omitted/i);
+});
+
+test("resource timing excludes even the millisecond immediately before consent", () => {
+  const f = fixture(); f.start(false, "nonce-1", 1700000001000);
+  f.emitResource({ name: "https://app.test/before", responseStatus: 500, startTime: 999 });
+  assert.equal(f.failures().length, 0);
+  f.emitResource({ name: "https://app.test/during", responseStatus: 500, startTime: 1000 });
+  assert.equal(f.failures().length, 1);
 });

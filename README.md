@@ -64,7 +64,7 @@ The three API calls behind it — the health check, the capture, and the listing
 - **Human review:** inspect events and any screenshots, edit the title, problem statement, and acceptance criteria, and save draft edits locally.
 - **Local ticket delivery:** preview the exact ticket, then confirm one draft at a time. The adapter creates a backlog ticket with `no-auto`, preserves capture identity for retries, and independently reads it back before showing verified delivery.
 - **Opt-in end-to-end automation:** while Panther is on, choose automatic delivery to the displayed local ticket service destination before Start. After Stop, Panther saves the capture, generates unreviewed proposals, delivers up to five, and verifies each ticket. If generation exceeds the cap, the whole job blocks before sending. Progress, retry timing, counts, and cancellation are visible. Bounded retries reuse the same identities; turning Panther off cancels remaining automatic delivery.
-- **Portable JSON:** export the same draft and provenance for another tool. Additional destinations need an adapter or importer; GitHub, Jira, Linear, and arbitrary native apps are not built-in integrations yet.
+- **Portable JSON:** export the same draft and provenance for another tool. GitHub issues and a compatible local ticket service have built-in adapters. Jira, Linear, and arbitrary native apps need an adapter or importer.
 
 Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
 

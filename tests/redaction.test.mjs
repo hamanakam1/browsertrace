@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeEventPayload, sanitizeCaptureEvent, sanitizeUrl } from "../extension/shared/redaction.js";
+import { sanitizeEventPayload, sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "../extension/shared/redaction.js";
 
 test("redacts secret field names and nested fields", () => {
   const out = sanitizeEventPayload({ password: "hunter2", token: "abc", user: { api_key: "sk-123", email: "a@b.c" } });
@@ -46,4 +46,21 @@ test("page failures are dropped when unknown, empty or out of range", () => {
 test("page failure messages are scrubbed like every other captured text", () => {
   const out = sanitizeCaptureEvent({ type: "diagnostic", ts: 1, diagnostic: { kind: "uncaught_exception", message: "failed for user@example.test with Bearer abcdef123456" } }, 1);
   assert.doesNotMatch(out.diagnostic.message, /user@example\.test|abcdef123456/);
+});
+
+test("captured text removes embedded URL credentials and quoted credential values before clipping", () => {
+  for (const text of [
+    'Failed https://synthetic-user:synthetic-pass@app.test/reset?code=synthetic-code&access_token=synthetic-token',
+    'JSON failed: {"password":"synthetic-password","access_token":"synthetic-token"}',
+    "Request failed: {'session_id': 'synthetic session with spaces', 'cookie': 'synthetic-cookie'}",
+    'Request failed: password="synthetic password with spaces"',
+    String.raw`JSON failed: {"password":"synthetic \"quoted\" value","status":500}`,
+    'Basic c3ludGhldGljOmNyZWRlbnRpYWw=',
+    'Request failed: {"secret":"synthetic value without closing quote'
+  ]) {
+    assert.doesNotMatch(sanitizeText(text, 300), /synthetic/);
+  }
+  assert.equal(sanitizeText('Failed https://app.test/api/items?code=synthetic-code', 300), 'Failed https://app.test/api/items');
+  assert.match(sanitizeText('JSON failed: {"password":"synthetic-password","status":500}', 300), /"status":500/);
+  assert.equal(sanitizeText('Basic c3ludGhldGljOmNyZWRlbnRpYWw='), '[REDACTED]');
 });

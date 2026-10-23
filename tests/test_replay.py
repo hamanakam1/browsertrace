@@ -1,4 +1,5 @@
 """Replay-plan contract tests: a proposal, never an execution."""
+import ast
 import json
 import sys
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import replay  # noqa: E402
 import tickets  # noqa: E402
+from redaction import sanitize_capture_event  # noqa: E402
 
 RECORDING = {
     "id": "replay-capture-1", "url": "http://127.0.0.1:8080/work-board?token=secret",
@@ -112,6 +114,35 @@ class ReplayPlanTests(unittest.TestCase):
                    "target": {"tag": "button", "id": f"b{index}"}} for index in range(500)]
         plan = replay.build_plan(dict(RECORDING), events)
         self.assertLessEqual(len(plan["steps"]), replay.MAX_STEPS)
+
+    def test_link_urls_remain_literal_data_in_generated_python(self):
+        for href in ("https://example.test/');print(1);#x",
+                     "https://example.test/team's-page",
+                     'https://example.test/a"b\\c'):
+            with self.subTest(href=href):
+                event = sanitize_capture_event({"type": "click", "ts": 1000500,
+                                                "target": {"tag": "a", "href": href}})
+                plan = replay.build_plan(dict(RECORDING), [event])
+                tree = ast.parse(replay.render_playwright(plan))
+                calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+                self.assertFalse(any(isinstance(call.func, ast.Name) and call.func.id == "print"
+                                     for call in calls))
+                locators = [call for call in calls if isinstance(call.func, ast.Attribute)
+                            and call.func.attr == "locator"]
+                self.assertEqual(len(locators), 1)
+                expected = 'a[href="' + event["target"]["href"].replace("\\", "\\\\").replace('"', '\\"') + '"]'
+                self.assertEqual(ast.literal_eval(locators[0].args[0]), expected)
+                clicks = [call for call in calls if isinstance(call.func, ast.Attribute)
+                          and call.func.attr == "click"]
+                self.assertEqual(len(clicks), 1)
+
+    def test_redacted_names_are_not_replayable_handles(self):
+        for target in ({"tag": "button", "label": "[EMAIL]"},
+                       {"tag": "button", "role": "button", "label": "[REDACTED]"}):
+            with self.subTest(target=target):
+                plan = replay.build_plan(dict(RECORDING), [{"type": "click", "target": target}])
+                self.assertFalse(plan["steps"][-1]["replayable"])
+                self.assertNotIn(".click()", replay.render_playwright(plan))
 
 
 if __name__ == "__main__":

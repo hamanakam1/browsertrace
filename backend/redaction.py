@@ -45,7 +45,6 @@ DIAGNOSTIC_KINDS = {
     "resource_error",
 }
 MAX_DIAGNOSTIC_MESSAGE = 300
-MAX_DIAGNOSTIC_SOURCE = 1000
 MAX_DIAGNOSTIC_POSITION = 1000000
 
 
@@ -112,9 +111,16 @@ def sanitize_event_payload(payload: Any) -> Any:
 def sanitize_text(value: Any, limit: int = 120) -> str:
     if not isinstance(value, str):
         return ""
-    text = re.sub(r"\bBearer\s+[a-z0-9._~+/-]+=*", "[REDACTED]", value, flags=re.I)
+    # Sanitize embedded URLs before email/token matching can split credentials.
+    text = re.sub(r'''https?://[^\s<>"'`]+''',
+                  lambda match: sanitize_url(match.group()) or "[URL]", value, flags=re.I)
+    text = re.sub(r"\b(?:Bearer|Basic)\s+[a-z0-9._~+/-]+=*", "[REDACTED]", text, flags=re.I)
     text = re.sub(r"\b(?:sk|ghp|github_pat|xox[baprs])[-_][a-z0-9_-]+", "[REDACTED]", text, flags=re.I)
-    text = re.sub(r"\b(?:password|token|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+", "[REDACTED]", text, flags=re.I)
+    # Keep this in step with the extension: consume whole quoted values rather
+    # than leaving the tail of a password containing spaces or escaped quotes.
+    text = re.sub(
+        r'''\b(?:password|passwd|pwd|token|(?:access|refresh|id)[_-]?token|secret(?:[_-]?key)?|api[_-]?key|authorization|credentials?|private[_-]?key|session(?:[_-]?id)?|cookie)["']?\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)''',
+        "[REDACTED]", text, flags=re.I)
     text = re.sub(r"[a-z0-9.!#$%&'*+/=?^_{}|~-]+@[a-z0-9.-]+\.[a-z]{2,}", "[EMAIL]", text, flags=re.I)
     text = re.sub(r"\b[a-z0-9_-]{40,}\b", "[REDACTED]", text, flags=re.I)
     return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:limit]
@@ -156,7 +162,8 @@ def sanitize_diagnostic(payload: Any, timestamp: int) -> Any:
             diagnostic["message"] = cleaned
     source = raw.get("source")
     if isinstance(source, str):
-        cleaned = sanitize_url(source[:MAX_DIAGNOSTIC_SOURCE])
+        # Redact complete path segments before enforcing the output bound.
+        cleaned = sanitize_url(source)
         if cleaned:
             diagnostic["source"] = cleaned
     status = raw.get("status")

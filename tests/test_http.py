@@ -1,4 +1,5 @@
 """Real HTTP tests with an isolated store and no live dashboard/model calls."""
+import ast
 import concurrent.futures
 import io
 import json
@@ -18,6 +19,7 @@ import storage
 import automation
 import integrations
 import destinations
+import github
 from api import routes
 from server import Handler
 from tickets import DraftGenerationError
@@ -78,6 +80,21 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 201, data)
         return data["id"]
 
+    def test_replay_exports_keep_page_controlled_links_inside_literals(self):
+        self.capture["events"] = [{"type": "click", "ts": 1700000001000,
+                                   "target": {"tag": "a", "href": "https://example.test/');print(1);#x"}}]
+        rid = self.record()
+        code, plan, _ = self.request(f"/api/extension/recordings/{rid}/replay")
+        self.assertEqual(code, 200)
+        self.assertFalse(plan["authority"]["execution_authorized"])
+        code, script, headers = self.request(f"/api/extension/recordings/{rid}/replay?format=playwright")
+        self.assertEqual(code, 200)
+        self.assertEqual(headers.get_content_type(), "text/plain")
+        calls = [node for node in ast.walk(ast.parse(script)) if isinstance(node, ast.Call)]
+        self.assertFalse(any(isinstance(call.func, ast.Name) and call.func.id == "print" for call in calls))
+        self.assertEqual(sum(isinstance(call.func, ast.Attribute) and call.func.attr == "click"
+                             for call in calls), 1)
+
     def test_capture_draft_edit_export_flow(self):
         rid = self.record()
         code, replay, _ = self.request("/api/extension/record", self.capture)
@@ -109,6 +126,32 @@ class HttpTests(unittest.TestCase):
                 **body, "confirmed": True, "payload_hash": preview["payload_hash"]})
             self.assertEqual(code, 200, delivered)
             submit.assert_called_once()
+
+    def test_confirmed_preview_is_checked_again_at_the_adapter_boundary(self):
+        rid = self.record()
+        code, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+        self.assertEqual(code, 200)
+        body = {"ticket_id": drafts["tickets"][0]["id"]}
+        original_submit = destinations.submit
+        for kind, adapter, env_key, original_target, changed_target in (
+            ("github", github, "PANTHER_GITHUB_REPO", "example/review", "example/changed"),
+            ("ticket-service", integrations, "PANTHER_DASHBOARD_URL", "http://127.0.0.1:8080", "http://127.0.0.1:8081"),
+        ):
+            with self.subTest(kind=kind), patch.dict("os.environ", {env_key: original_target}):
+                code, preview, _ = self.request(f"/api/extension/integrations/{kind}/preview/{rid}", body)
+                self.assertEqual(code, 200, preview)
+
+                def change_after_confirmation(*args, **kwargs):
+                    with patch.dict("os.environ", {env_key: changed_target}):
+                        return original_submit(*args, **kwargs)
+
+                with patch.object(destinations, "submit", side_effect=change_after_confirmation), \
+                        patch.object(adapter, "_request", return_value={}) as outgoing:
+                    code, result, _ = self.request(f"/api/extension/integrations/{kind}/submit/{rid}", {
+                        **body, "confirmed": True, "payload_hash": preview["payload_hash"]})
+                self.assertIn(code, (400, 409), result)
+                outgoing.assert_not_called()
+                self.assertFalse((storage.ROOT / "deliveries").exists())
 
     def test_page_reported_failures_are_readable_and_never_verified(self):
         capture = {**self.capture, "events": [

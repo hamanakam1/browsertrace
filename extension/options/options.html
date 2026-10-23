@@ -34,13 +34,15 @@
 </div>
 <footer>Stored on this computer · No paid inference fallback · Dashboard submissions enter backlog with autonomous execution disabled</footer>
 </main>
-<dialog id="previewDialog">
+<dialog id="previewDialog" aria-labelledby="previewTitle" aria-describedby="previewDestination previewFence">
 <form method="dialog"><button class="close" aria-label="Close preview">×</button></form>
-<h2>Review ticket submission</h2>
-<p>This creates a backlog ticket with <strong>no-auto</strong> and a review fence. Sending a ticket does not authorize execution.</p>
+<h2 id="previewTitle">Review ticket submission</h2>
+<p id="previewDestination"></p>
+<p id="previewFence"></p>
 <div id="previewSummary"></div>
 <details><summary>Exact API payload</summary><pre id="previewBody"></pre></details><p id="previewWarnings" class="muted"></p>
-<div class="actions"><button id="confirmSend" class="primary">Send this reviewed ticket</button><button id="cancelSend">Cancel</button></div>
+<div class="actions"><button id="confirmSend" class="primary">Send this reviewed ticket</button><button id="cancelSend">Close preview</button></div>
+<p class="muted">Closing this preview does not cancel a submission already in flight.</p>
 <p id="deliveryStatus" role="status" aria-live="polite"></p>
 </dialog>
 <script type="module" src="options.js"></script>

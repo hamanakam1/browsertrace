@@ -125,6 +125,13 @@ CORPUS = {
         "person@example.test",
         "a" * 60,
         "plain text",
+        'Failed https://synthetic-user:synthetic-pass@example.test/reset?code=synthetic-code&access_token=synthetic-token',
+        'JSON failed: {"password":"synthetic-password","access_token":"synthetic-token"}',
+        "Request failed: {'session_id': 'synthetic session with spaces', 'cookie': 'synthetic-cookie'}",
+        'Request failed: password="synthetic password with spaces"',
+        r'JSON failed: {"password":"synthetic \"quoted\" value","status":500}',
+        'Basic c3ludGhldGljOmNyZWRlbnRpYWw=',
+        'Request failed: {"secret":"synthetic value without closing quote',
     ],
     "payloads": [
         {"password": "x", "token": "y", "nested": {"api_key": "z"}},
@@ -183,6 +190,19 @@ class RedactionParityTests(unittest.TestCase):
                 self.assertNotIn("abc123", redaction.sanitize_url(url))
                 self.assertNotIn("42", redaction.sanitize_url(url))
                 self.assertNotIn("#session", redaction.sanitize_url(url))
+
+    def test_embedded_credentials_do_not_survive_text(self):
+        for text in CORPUS["texts"]:
+            if "synthetic" in text:
+                with self.subTest(text=text):
+                    self.assertNotIn("synthetic", redaction.sanitize_text(text, 300))
+
+    def test_diagnostic_source_is_redacted_before_clipping(self):
+        source = "https://example.test/" + "/" * 970 + "synthetic" * 8
+        event = {"type": "diagnostic", "ts": 1, "diagnostic": {
+            "kind": "resource_error", "source": source}}
+        clean = redaction.sanitize_capture_event(event)
+        self.assertNotIn("synthetic", clean["diagnostic"]["source"])
 
     def test_page_text_is_never_read_from_a_text_field(self):
         """The extension sends an accessible name as "label" and never page text."""

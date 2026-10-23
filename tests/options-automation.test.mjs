@@ -33,3 +33,21 @@ test("receipt links must match the admitted loopback target", () => {
     assert.equal(safeTicketURL(value, target), null);
   }
 });
+test("GitHub receipt links stay within the admitted repository and issue route", () => {
+  const target = "https://api.github.com/repos/example/project";
+  const href = "https://github.com/example/project/issues/12";
+  assert.equal(safeTicketURL(href, target), href);
+  for (const value of [
+    "https://github.com/example/other/issues/12", "https://github.com/other/project/issues/12",
+    "https://github.com/example/project/pull/12", "https://github.com/example/project/issues/0",
+    "https://github.com/example/project/issues/12/extra", "https://github.com/example/project/issues/12?token=value",
+    "https://github.com/example/project/issues/12#fragment", "https://github.com/example/project/issues/new",
+    "http://github.com/example/project/issues/12", "https://user@github.com/example/project/issues/12",
+    "https://github.com.attacker.test/example/project/issues/12", "javascript:alert(1)",
+  ]) assert.equal(safeTicketURL(value, target), null, value);
+  for (const admitted of [
+    "https://api.github.com/repos/example/project?token=value", "https://api.github.com/repos/example/project#fragment",
+    "https://api.github.com/repos/example/project/extra", "https://api.github.com/repos/example/project/issues",
+    "https://api.github.com.attacker.test/repos/example/project", "http://api.github.com/repos/example/project",
+  ]) assert.equal(safeTicketURL(href, admitted), null, admitted);
+});

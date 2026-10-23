@@ -318,6 +318,45 @@ class AutomationTests(unittest.TestCase):
         self.assertIn("expired", result["error"])
         self.assertEqual(len(self.dashboard.state["posts"]), 1)
 
+    def test_waiting_for_an_adapter_keeps_cancellation_accessible(self):
+        rid = self.record()
+        entered, release = threading.Event(), threading.Event()
+        worker_errors = []
+        original_submit = integrations.submit_ticket
+
+        def hold_send(recording, ticket, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("Synthetic delivery wait exceeded its bound")
+            self.assertEqual(kwargs.get("expected_payload_hash"),
+                             automation._load(rid)["frozen"]["items"][0]["payload_hash"])
+            return original_submit(recording, ticket, **kwargs)
+
+        def run():
+            try:
+                automation.run_once()
+            except Exception as exc:
+                worker_errors.append(exc)
+
+        with patch.object(integrations, "submit_ticket", side_effect=hold_send):
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertTrue(entered.wait(3))
+            cancel_thread = threading.Thread(target=lambda: automation.control(rid, "cancel"))
+            cancel_thread.start()
+            try:
+                cancel_thread.join(0.5)
+                self.assertFalse(cancel_thread.is_alive(), "Cancellation must persist while the adapter is waiting")
+            finally:
+                release.set()
+                worker.join(5)
+                cancel_thread.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(cancel_thread.is_alive())
+        self.assertEqual(worker_errors, [])
+        self.assertEqual(self.job(rid)["status"], "cancelled")
+        self.assertEqual(self.dashboard.state["posts"], [])
+
     def test_cancel_after_preview_before_network_prevents_all_sends(self):
         rid = self.record()
         generated = self.generated(rid, 2)

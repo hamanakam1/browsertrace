@@ -64,10 +64,10 @@ def _selector(target: Dict[str, Any]) -> Dict[str, Any]:
                 "css": f"#{identifier}", "replayable": True}
     role = _text(target.get("role"), 40).lower()
     label = _text(target.get("label"), MAX_LABEL)
-    if role and label:
+    if _usable(role) and _usable(label):
         return {"strategy": "role-name", "value": label, "attribute": None, "role": role,
                 "css": None, "replayable": True}
-    if label and tag in ("button", "a"):
+    if _usable(label) and tag in ("button", "a"):
         return {"strategy": "text", "value": label, "attribute": None, "role": None,
                 "css": None, "replayable": True}
     href = target.get("href")
@@ -176,7 +176,9 @@ def _playwright_locator(selector: Dict[str, Any]) -> Optional[str]:
     if strategy == "text" and value:
         return f"page.get_by_text({json.dumps(value)})"
     if strategy == "href" and value:
-        return f"page.locator('a[href={json.dumps(value)}]')"
+        # Escape the CSS value first, then quote the entire selector as Python
+        # data. A page-controlled apostrophe must never close a code literal.
+        return f"page.locator({json.dumps('a' + _css_attribute('href', value))})"
     return None
 
 

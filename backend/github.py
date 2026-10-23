@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,6 +35,9 @@ FENCE = integrations.FENCE
 REQUEST_TIMEOUT = 15
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_ISSUES_SCANNED = 100
+# Serialize remote submissions without holding DATA_LOCK across network I/O.
+# Browser Off and cancellation must remain able to revoke their admission.
+_SUBMIT_LOCK = threading.RLock()
 _LABEL = "panther"
 _REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\Z")
 
@@ -118,16 +122,10 @@ def _request(path: str, payload: Optional[dict] = None, *, before_send=None) -> 
         response = opener.open(request, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as exc:
         status = exc.code
-        detail = ""
-        try:
-            body = exc.read(4096).decode("utf-8", "replace")
-            parsed = json.loads(body)
-            if isinstance(parsed, dict) and isinstance(parsed.get("message"), str):
-                detail = f": {parsed['message'][:120]}"
-        except (OSError, ValueError, UnicodeError):
-            detail = ""
+        # Remote error bodies can reflect credentials or private issue content.
+        # The status alone is sufficient to report an unconfirmed delivery.
         exc.close()
-        raise ValueError(f"GitHub returned HTTP {status}{detail}") from None
+        raise ValueError(f"GitHub returned HTTP {status}; delivery is not confirmed.") from None
     with response:
         raw = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw) > MAX_RESPONSE_BYTES:
@@ -166,7 +164,8 @@ def _result(receipt: dict, previously_verified: bool = False) -> dict:
               "verified_at": receipt.get("verified_at"), "receipt": receipt}
     if receipt.get("item"):
         number = receipt["item"]
-        result.update(ticket_key=f"#{number}", ticket_url=f"https://github.com/{_repo()}/issues/{number}",
+        repo = urllib.parse.urlsplit(receipt["target"]).path.removeprefix("/repos/")
+        result.update(ticket_key=f"#{number}", ticket_url=f"https://github.com/{repo}/issues/{number}",
                       created=receipt.get("created"))
     if receipt.get("error"):
         result["error"] = receipt["error"]
@@ -175,7 +174,7 @@ def _result(receipt: dict, previously_verified: bool = False) -> dict:
 
 def _error(exc: Exception) -> str:
     if isinstance(exc, ValueError):
-        return f"{str(exc)[:200]}. No issue was created."
+        return str(exc)[:250]
     return "GitHub could not be reached or timed out; any retry uses the same capture identity."
 
 
@@ -208,6 +207,7 @@ def _detail(record: dict, draft: dict, seed: str) -> str:
 def preview_ticket(recording: dict, ticket: dict) -> Dict[str, Any]:
     """Build the exact issue payload. This function never contacts GitHub."""
     record, draft = integrations._recording(recording), integrations._draft(ticket)
+    destination = target()
     seed = f"panther:capture:{record['id']}:{draft['id']}"
     identity = _search_marker(record["id"], draft["id"])
     body = _detail(record, draft, identity)
@@ -220,44 +220,61 @@ def preview_ticket(recording: dict, ticket: dict) -> Dict[str, Any]:
         "labels": [_LABEL, "needs-triage", "no-auto"],
     }
     fingerprint = hashlib.sha256(json.dumps(
-        {"target_url": target(), "payload": payload, "recording": record, "draft": draft},
+        {"target_url": destination, "payload": payload, "recording": record, "draft": draft},
         sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
     with storage.DATA_LOCK:
-        receipt = integrations._load_receipt(target(), seed)
+        receipt = integrations._load_receipt(destination, seed)
     warnings = ["Created issues are review-fenced: the body states that execution is not authorized.",
                 "The no-auto label is a convenience; the review fence is the text in the body.",
                 "A bounded summary is sent; the full neutral export remains available in Panther."]
-    return {"ok": True, "target": KIND, "target_url": target(), "payload": payload,
+    return {"ok": True, "target": KIND, "target_url": destination, "payload": payload,
             "seed_key": seed, "payload_hash": fingerprint, "warnings": warnings, "receipt": receipt}
 
 
-def _find_existing(seed: str) -> Optional[dict]:
-    """Find an issue that already carries this identity, if one exists."""
-    repo = _repo()
-    issues = _request(f"/repos/{repo}/issues?state=all&per_page={MAX_ISSUES_SCANNED}&sort=created&direction=desc")
+def _find_existing(seed: str, repo_path: str) -> Optional[dict]:
+    """Find a candidate in a bounded recent page, without proving absence."""
+    issues = _request(f"{repo_path}/issues?state=all&per_page={MAX_ISSUES_SCANNED}&sort=created&direction=desc")
     if not isinstance(issues, list):
         raise ValueError("GitHub returned an unexpected issue list")
     for issue in issues:
         if not isinstance(issue, dict) or "pull_request" in issue:
             continue
-        if seed in (issue.get("body") or ""):
+        body = issue.get("body")
+        if isinstance(body, str) and f"Identity: {seed}" in body.splitlines():
             return issue
     return None
 
 
-def _verify(seed: str, issue: dict, payload: dict) -> None:
-    """Confirm the returned issue is exactly the one that was asked for."""
-    if (type(issue.get("number")) is not int or issue["number"] <= 0
+def _verify(seed: str, issue: dict, payload: dict, number: int) -> None:
+    """Confirm the exact created issue, content and required review labels."""
+    if (type(issue.get("number")) is not int or issue["number"] != number or number <= 0
             or issue.get("title") != payload["title"]
-            or seed not in (issue.get("body") or "")
-            or issue.get("state") not in ("open", "closed")):
-        raise ValueError("GitHub did not confirm the exact issue identity; delivery remains pending.")
+            or issue.get("body") != payload["body"]
+            or f"Identity: {seed}" not in payload["body"].splitlines()
+            or issue.get("state") not in ("open", "closed") or "pull_request" in issue):
+        raise ValueError("GitHub did not confirm the exact issue content and identity; delivery remains pending.")
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("GitHub did not confirm the required review labels; delivery remains pending.")
+    names = {label.get("name") for label in labels if isinstance(label, dict) and isinstance(label.get("name"), str)}
+    if not set(payload["labels"]).issubset(names) or "auto" in names:
+        raise ValueError("GitHub did not confirm the required review labels; delivery remains pending.")
 
 
-def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> Dict[str, Any]:
-    """Create one confirmed issue and verify it, reusing a durable receipt."""
+def submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
+    """Serialize one confirmed issue's durable receipt and remote outcome."""
+    with _SUBMIT_LOCK:
+        return _submit_ticket(recording, ticket, before_send=before_send, expected_payload_hash=expected_payload_hash)
+
+
+def _submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
     preview = preview_ticket(recording, ticket)
+    if expected_payload_hash is not None and preview["payload_hash"] != expected_payload_hash:
+        raise ValueError("The confirmed GitHub destination or payload changed; preview and confirm it again before sending.")
     destination, payload, seed = preview["target_url"], preview["payload"], preview["seed_key"]
+    # Every request and returned link uses this preview's destination, never a
+    # fresh configuration read that could retarget already-consented content.
+    repo_path = urllib.parse.urlsplit(destination).path
     identity = _search_marker(recording["id"], ticket["id"])
     with storage.DATA_LOCK:
         prior = integrations._load_receipt(destination, seed)
@@ -269,25 +286,47 @@ def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> Dict[st
             return _result(prior, previously_verified=True)
         receipt = dict(prior or {}, target=destination, seed_key=seed, payload_hash=preview["payload_hash"],
                        state="pending", verified=False, updated_at=time.time())
+        # An older pending receipt cannot prove whether its POST was sent.
+        receipt.setdefault("create_attempted", prior is not None)
         receipt.pop("error", None)
         path = integrations._receipt_path(destination, seed)
         storage.write_json(path, receipt)  # a write failure must prevent the request
+
+    def authorize_creation():
+        if target() != destination:
+            raise ValueError("The configured GitHub destination changed; preview and confirm it again before sending.")
+        if before_send is not None:
+            before_send()
+        # Persist before dispatch: a crash or lost POST response must not make
+        # the bounded recent-issues search authorize a second creation.
+        receipt.update(create_attempted=True, updated_at=time.time())
+        storage.write_json(path, receipt)
+
     try:
-        existing = _find_existing(identity)
-        if existing:
-            receipt.update(item=existing.get("number"), created=False, updated_at=time.time())
-            storage.write_json(path, receipt)
-        else:
-            response = _request(f"/repos/{_repo()}/issues", payload, before_send=before_send)
-            if not isinstance(response, dict) or type(response.get("number")) is not int or response["number"] <= 0:
-                raise ValueError("GitHub did not return a valid issue number")
-            receipt.update(item=response["number"], created=True, updated_at=time.time())
-            storage.write_json(path, receipt)
-            existing = response
-        readback = _request(f"/repos/{_repo()}/issues/{receipt['item']}")
+        if not receipt.get("item"):
+            existing = _find_existing(identity, repo_path)
+            if existing:
+                number = existing.get("number")
+                if type(number) is not int or number <= 0:
+                    raise ValueError("GitHub did not return a valid existing issue number")
+                receipt.update(item=number, created=False, updated_at=time.time())
+                storage.write_json(path, receipt)
+            elif receipt["create_attempted"]:
+                raise ValueError("A previous creation attempt remains unconfirmed and was not found in the recent issues. "
+                                 "No additional issue was sent; review the destination before retrying.")
+            else:
+                response = _request(f"{repo_path}/issues", payload, before_send=authorize_creation)
+                if not isinstance(response, dict) or type(response.get("number")) is not int or response["number"] <= 0:
+                    raise ValueError("GitHub did not return a valid issue number")
+                receipt.update(item=response["number"], created=True, updated_at=time.time())
+                storage.write_json(path, receipt)
+        number = receipt["item"]
+        if type(number) is not int or number <= 0:
+            raise ValueError("Existing delivery receipt has an invalid issue number; delivery remains pending.")
+        readback = _request(f"{repo_path}/issues/{number}")
         if not isinstance(readback, dict):
             raise ValueError("GitHub did not return the created issue")
-        _verify(identity, readback, payload)
+        _verify(identity, readback, payload, number)
         receipt.update(state="delivered", verified=True, verified_at=time.time(), updated_at=time.time())
     except (OSError, ValueError, urllib.error.URLError) as exc:
         receipt.update(state="pending", verified=False, error=_error(exc), updated_at=time.time())

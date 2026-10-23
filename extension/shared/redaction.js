@@ -37,6 +37,7 @@ export function sanitizeEventPayload(payload) {
 /** Remove URL credentials, all query values, and secret-bearing fragments. */
 export function sanitizeUrl(value) {
   try {
+    if (typeof value !== "string" || value.length > 8192) return "";
     const url = new URL(String(value));
     if (!/^https?:$/.test(url.protocol)) return "";
     url.username = "";
@@ -51,9 +52,14 @@ export function sanitizeUrl(value) {
 
 export function sanitizeText(value, max = 120) {
   return String(value ?? "")
-    .replace(/\b(?:Bearer\s+)[a-z0-9._~+/-]+=*/gi, "[REDACTED]")
+    // Error messages and accessible names can embed complete URLs. Apply the
+    // URL policy before email/token matching can split their credentials.
+    .replace(/https?:\/\/[^\s<>"'`]+/gi, (url) => sanitizeUrl(url) || "[URL]")
+    .replace(/\b(?:(?:Bearer|Basic)\s+)[a-z0-9._~+/-]+=*/gi, "[REDACTED]")
     .replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][a-z0-9_-]+/gi, "[REDACTED]")
-    .replace(/\b(?:password|token|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi, "[REDACTED]")
+    // Include quoted JSON/form-style keys and whole quoted values, including
+    // spaces, escaped quotes and incomplete values at the end of a message.
+    .replace(/\b(?:password|passwd|pwd|token|(?:access|refresh|id)[_-]?token|secret(?:[_-]?key)?|api[_-]?key|authorization|credentials?|private[_-]?key|session(?:[_-]?id)?|cookie)["']?\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,;]+)/gi, "[REDACTED]")
     .replace(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/gi, "[EMAIL]")
     .replace(/\b[a-z0-9_-]{40,}\b/gi, "[REDACTED]")
     .replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);

@@ -14,9 +14,10 @@ stays loopback-only.
 - Puts the **review fence in the body text**: every issue begins with
   "not authorized for autonomous execution". The `no-auto` label is a
   convenience; the fence is the text.
-- Carries a stable identity for each draft of each capture, so the same
-  draft is never created twice.
-- Verifies the created issue by reading it back before reporting delivery.
+- Carries a stable identity for each draft of each capture, with durable
+  receipts that prevent an uncertain attempt from authorizing another creation.
+- Verifies the issue number, exact title and body, and required review labels
+  by reading the issue back before reporting delivery.
 - Keeps a durable local receipt, exactly like the other destinations.
 
 ## Configuring it
@@ -44,14 +45,28 @@ token can reach. GitHub Enterprise would need its own explicit design.
 GitHub's issue API has no idempotency key, so Panther uses two mechanisms:
 
 1. **A local receipt** keyed by the destination and the draft identity. This
-   is the primary mechanism: the same draft is never submitted twice, and a
-   retry reuses the same identity.
+   is the primary mechanism: creation intent is persisted before dispatch,
+   concurrent submissions are serialized within the backend, and a retry
+   reuses the same identity. A known issue number is read back directly.
 2. **An identity marker in the issue body.** Before creating anything,
    Panther reads the repository's recent issues and looks for that marker. An
    issue that already carries it is reused rather than duplicated.
 
 The marker is `panther-capture-<recording-id>-<draft-id>`. It is the
 identity of one draft of one capture.
+
+The search covers at most 100 recent issues. A missing marker in that page
+does not prove that an earlier request failed: its response might have been
+lost, or the issue might have moved outside the search window. After an
+attempted creation, Panther keeps that uncertainty pending and sends no
+additional creation request. A retry can still find and verify the existing
+issue. Older pending receipts without an issue number receive the same
+conservative treatment. Review unresolved attempts at the destination;
+removing receipts or using a new identity can create duplicates.
+
+This protection depends on retaining receipts and using one backend for a
+data directory. It does not establish duplicate prevention between separate
+machines, copied stores, or multiple backend processes sharing the directory.
 
 If the same identity is submitted with **different** content, the result is a
 `conflict`, not an update. An existing issue is never silently rewritten.
@@ -63,8 +78,7 @@ Panther does not perform.
 | State | Meaning |
 |---|---|
 | `delivered` | The issue was created or found, and the readback matched. |
-| `pending` | A request or the readback was uncertain. Retry with the same identity. |
-| `refused` | GitHub refused the creation, for example because the token lacks permission. |
+| `pending` | A request failed or the readback was uncertain. Retry with the same identity to reconcile; an attempted creation is not automatically sent again. |
 | `conflict` | This identity was already submitted with different content. |
 
 ## Consent
@@ -80,7 +94,9 @@ consented one, and blocks itself instead of delivering somewhere else.
 
 The review page has the same choice for manual delivery, and a manual
 delivery is always a preview followed by an explicit confirmation of that
-exact payload.
+exact payload and destination. The preview names the remote repository.
+The adapter checks the confirmed hash again before receipt or network work,
+so a configuration change while waiting to submit requires a new preview.
 
 ## Routes
 

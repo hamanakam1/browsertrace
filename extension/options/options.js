@@ -15,6 +15,9 @@ let automationStale = false;
 let automationTimer = null;
 let renderedDraftCount = 0;
 let deliveryKind = "";
+let destinationList = [];
+let deliveryTarget = "";
+let previewRequest = 0;
 let automationRequest = 0;
 let automationControlBusy = false;
 const busyButtons = new WeakSet();
@@ -22,6 +25,12 @@ const busyButtons = new WeakSet();
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
+}
+function invalidatePreview() {
+  ++previewRequest;
+  activePreview = null;
+  $("confirmSend").disabled = true;
+  if ($("previewDialog").open) $("previewDialog").close();
 }
 async function api(path, body, method = body === undefined ? "GET" : "POST") {
   if (browserControlled) {
@@ -178,7 +187,7 @@ async function refresh() {
   } catch (error) {
     $("backendStatus").textContent = "Local backend unavailable";
     $("backendDot").classList.remove("ok");
-    message(error.message + " — start backend/start.sh, then refresh.", true);
+    message(error.message + (browserControlled ? "" : " — start backend/start.sh, then refresh."), true);
   }
   try {
     const catalogue = await api("integrations");
@@ -189,11 +198,12 @@ async function refresh() {
 /** Show every delivery destination and let one be chosen for manual delivery. */
 function renderDestinations(list) {
   const previous = $("deliveryDestination").value;
+  destinationList = list;
   $("deliveryDestination").replaceChildren(...list.map((destination) => {
     const option = document.createElement("option");
     option.value = destination.kind;
-    option.textContent = destination.available ? destination.label
-      : destination.configured ? `${destination.label} (not reachable right now)` : `${destination.label} (not configured)`;
+    option.textContent = destination.available ? `${destination.label} — ${destination.url}`
+      : destination.configured ? `${destination.label} — ${destination.url} (not reachable right now)` : `${destination.label} (not configured)`;
     option.disabled = !destination.configured;
     return option;
   }));
@@ -201,12 +211,16 @@ function renderDestinations(list) {
   const chosen = usable.find((destination) => destination.kind === previous) || usable[0];
   $("deliveryDestination").value = chosen ? chosen.kind : "";
   $("deliveryDestination").hidden = list.length < 2;
-  deliveryKind = chosen ? chosen.kind : "";
-  const selected = list.find((destination) => destination.kind === deliveryKind);
-  $("dashboardStatus").textContent = !selected ? "Delivery destination not configured · capture and JSON export still work"
-    : selected.available ? `${selected.label} reachable · delivery verified when sent`
-      : selected.configured ? `${selected.label} configured but not reachable · JSON export still works`
-        : `${selected.label} is not configured · capture and JSON export still work`;
+  selectDestination();
+}
+function selectDestination() {
+  const destination = destinationList.find(item => item.kind === $("deliveryDestination").value && item.configured);
+  const kind = destination?.kind || "", target = destination?.url || "";
+  if (kind !== deliveryKind || target !== deliveryTarget) invalidatePreview();
+  deliveryKind = kind; deliveryTarget = target;
+  $("dashboardStatus").textContent = !destination ? "Delivery destination not configured · capture and JSON export still work"
+    : destination.available ? `${destination.label}: ${target} · reachable · delivery verified when sent`
+      : `${destination.label}: ${target} · configured but not reachable · JSON export still works`;
 }
 function renderLibrary() {
   $("count").textContent = recordings.length;
@@ -220,6 +234,7 @@ function renderLibrary() {
 }
 async function openCapture(id) {
   if (loading) return;
+  invalidatePreview();
   const version = ++requestVersion;
   clearTimeout(automationTimer);
   const [capture, evidence] = await Promise.all([api("recordings/" + id), api("recordings/" + id + "/events")]);
@@ -327,10 +342,24 @@ function renderTickets(data, recordingId = selected.id) {
       message("Draft edits saved locally.");
     }));
     actions.append(button("Preview ticket delivery", async () => {
+      const kind = deliveryKind, target = deliveryTarget;
+      if (!kind || !target) throw new Error("Configure and choose a delivery destination before previewing a ticket.");
+      invalidatePreview();
+      const request = previewRequest, version = requestVersion;
+      const current = () => request === previewRequest && version === requestVersion && selected?.id === recordingId;
       const body = {ticket_id: ticket.id, patch: patch()};
       await api("tickets/" + recordingId + "/review", body);
-      const preview = await api("integrations/" + encodeURIComponent(deliveryKind) + "/preview/" + recordingId, body);
-      activePreview = {id: recordingId, body, preview};
+      if (!current()) return;
+      const preview = await api("integrations/" + encodeURIComponent(kind) + "/preview/" + recordingId, body);
+      if (!current()) return;
+      if (preview.target !== kind || preview.target_url !== target) {
+        throw new Error("The delivery destination changed. Refresh and review a new preview before sending.");
+      }
+      activePreview = {id: recordingId, kind, body, preview, sending: false};
+      $("previewDestination").textContent = `Destination: ${preview.target_url}${kind === "github" ? " · remote GitHub repository; sending shares this ticket with GitHub" : " · local ticket service"}`;
+      $("previewFence").textContent = kind === "github"
+        ? "This creates a GitHub issue with a review instruction in its body and a no-auto label. These are not GitHub permission controls. Sending does not authorize execution."
+        : "This creates a backlog ticket with no-auto and a review fence. Sending does not authorize execution.";
       const summary = $("previewSummary");
       summary.replaceChildren(element("h3", preview.payload.title), element("p", body.patch.description));
       summary.append(element("h3", "Expected result"));
@@ -354,6 +383,7 @@ function renderTickets(data, recordingId = selected.id) {
   syncDraftControls();
 }
 $("refresh").addEventListener("click", refresh);
+$("deliveryDestination").addEventListener("change", selectDestination);
 $("generate").addEventListener("click", () => generate(false));
 $("generateAI").addEventListener("click", () => generate(true));
 $("retryAutomation").addEventListener("click", () => controlAutomation("retry"));
@@ -362,16 +392,21 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { ++automationRequest; clearTimeout(automationTimer); }
   else if (selected) pollAutomation();
 });
-$("cancelSend").addEventListener("click", () => $("previewDialog").close());
+$("cancelSend").addEventListener("click", invalidatePreview);
+$("previewDialog").addEventListener("close", invalidatePreview);
+$("previewDialog").addEventListener("cancel", invalidatePreview);
 $("confirmSend").addEventListener("click", async () => {
-  if (!activePreview) return;
+  if (!activePreview || activePreview.sending) return;
+  const pending = activePreview;
+  pending.sending = true;
   $("confirmSend").disabled = true;
   $("deliveryStatus").classList.remove("error");
-  $("deliveryStatus").textContent = "Sending and verifying the dashboard ticket…";
+  $("deliveryStatus").textContent = "Sending and verifying at " + pending.preview.target_url + "…";
   try {
-    const {id, body, preview} = activePreview;
-    const result = await api("integrations/" + encodeURIComponent(deliveryKind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
-    if (result.verified) {
+    const {id, kind, body, preview} = pending;
+    const result = await api("integrations/" + encodeURIComponent(kind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    if (activePreview !== pending) return;
+    if (result.verified === true) {
       const verifiedAt = result.receipt?.verified_at;
       const when = Number.isFinite(verifiedAt) ? new Date(verifiedAt * 1000).toLocaleString() : "the recorded delivery time";
       $("deliveryStatus").textContent = result.previously_verified
@@ -380,13 +415,18 @@ $("confirmSend").addEventListener("click", async () => {
     } else {
       $("deliveryStatus").textContent = "Submission state: " + result.state + ". Verification is still pending; retry uses the same capture identity.";
     }
-    if (result.verified && result.ticket_url) {
-      const link = element("a", " Open ticket"); link.href = result.ticket_url; link.target = "_blank"; link.rel = "noopener"; $("deliveryStatus").append(link);
+    const href = safeTicketURL(result.ticket_url, preview.target_url);
+    if (result.verified === true && href) {
+      const link = element("a", " Open ticket"); link.href = href; link.target = "_blank"; link.rel = "noopener"; $("deliveryStatus").append(link);
     }
   } catch (error) {
+    if (activePreview !== pending) return;
     $("deliveryStatus").textContent = error.message + " — Retry preserves the same ticket identity.";
     $("deliveryStatus").classList.add("error");
-  } finally { $("confirmSend").disabled = false; }
+  } finally {
+    pending.sending = false;
+    if (activePreview === pending) $("confirmSend").disabled = false;
+  }
 });
 $("deleteCapture").addEventListener("click", async () => {
   if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
@@ -403,27 +443,30 @@ function download(name, content, type) {
 }
 $("exportReplay").addEventListener("click", async () => {
   if (!selected) return;
+  const id = selected.id;
   try {
-    const plan = await api("recordings/" + selected.id + "/replay");
-    download("panther-replay-" + selected.id + ".json", JSON.stringify(plan, null, 2), "application/json");
+    const plan = await api("recordings/" + id + "/replay");
+    download("panther-replay-" + id + ".json", JSON.stringify(plan, null, 2), "application/json");
     message("Replay plan exported. It describes the recorded path only; no typed value was ever captured.");
   } catch (error) { message(error.message, true); }
 });
 $("exportReplayScript").addEventListener("click", async () => {
   if (!selected) return;
+  const id = selected.id;
   try {
-    const plan = await api("recordings/" + selected.id + "/replay?format=playwright");
-    download("panther-replay-" + selected.id + ".py", plan, "text/plain");
+    const plan = await api("recordings/" + id + "/replay?format=playwright");
+    download("panther-replay-" + id + ".py", plan, "text/plain");
     message("Replay script exported. It is a proposal to review; Panther never runs it.");
   } catch (error) { message(error.message, true); }
 });
 $("export").addEventListener("click", async () => {
   if (!selected) return;
+  const id = selected.id;
   try {
-    const bundle = await api("export/" + selected.id);
+    const bundle = await api("export/" + id);
     const blob = new Blob([JSON.stringify(bundle, null, 2)], {type: "application/json"});
     const url = URL.createObjectURL(blob); const link = document.createElement("a");
-    link.href = url; link.download = "panther-" + selected.id + ".json"; link.click(); URL.revokeObjectURL(url);
+    link.href = url; link.download = "panther-" + id + ".json"; link.click(); URL.revokeObjectURL(url);
     message("Draft bundle exported. Save any draft edits before exporting.");
   } catch (error) { message(error.message, true); }
 });

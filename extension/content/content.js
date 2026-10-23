@@ -121,8 +121,12 @@
     const kind = typeof detail.kind === "string" ? detail.kind : "";
     if (!DIAGNOSTIC_KINDS.has(kind)) return;
     const diagnostic = { kind };
-    if (typeof detail.message === "string") diagnostic.message = detail.message.slice(0, 300);
-    if (typeof detail.source === "string") diagnostic.source = detail.source.slice(0, 2000);
+    // Redaction in the background must see complete emails/credentials before
+    // its 300-character output bound. Oversized input is omitted as a whole;
+    // truncating it here could retain an otherwise recognizable secret prefix.
+    if (typeof detail.message === "string") diagnostic.message = detail.message.length <= 8192
+      ? detail.message : "[Oversized page error message omitted]";
+    if (typeof detail.source === "string" && detail.source.length <= 8192) diagnostic.source = detail.source;
     if (Number.isInteger(detail.status)) diagnostic.status = detail.status;
     if (Number.isInteger(detail.line)) diagnostic.line = detail.line;
     if (Number.isInteger(detail.column)) diagnostic.column = detail.column;
@@ -196,7 +200,7 @@
           if (!Number.isInteger(status) || status < 400 || status > 599) continue;
           const startedAt = performance.timeOrigin + entry.startTime;
           if (!Number.isFinite(startedAt)) continue;
-          if (captureStartMs && startedAt + 500 < captureStartMs) continue;
+          if (captureStartMs && startedAt < captureStartMs) continue;
           reportDiagnostic({
             kind: "http_error",
             message: `A request returned HTTP ${status}`,

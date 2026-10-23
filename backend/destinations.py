@@ -68,8 +68,9 @@ def preview(kind: str, recording: dict, ticket: dict) -> Dict[str, Any]:
     return _call(kind, "preview", recording, ticket)
 
 
-def submit(kind: str, recording: dict, ticket: dict, *, before_send=None) -> Dict[str, Any]:
-    return _call(kind, "submit", recording, ticket, before_send=before_send)
+def submit(kind: str, recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
+    return _call(kind, "submit", recording, ticket, before_send=before_send,
+                 expected_payload_hash=expected_payload_hash)
 
 
 def catalogue() -> List[Dict[str, Any]]:
