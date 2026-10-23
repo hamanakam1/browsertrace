@@ -150,6 +150,48 @@ class ReplayPlanTests(unittest.TestCase):
         plan = replay.build_plan(dict(RECORDING), events)
         self.assertLessEqual(len(plan["steps"]), replay.MAX_STEPS)
 
+    def test_diagnostics_do_not_consume_the_action_limit(self):
+        diagnostic = {"type": "diagnostic", "ts": 1000000,
+                      "diagnostic": {"kind": "http_error", "status": 500}}
+        click = {"type": "click", "target": {"tag": "button", "id": "save"}}
+        plan = replay.build_plan(dict(RECORDING), [diagnostic] * replay.MAX_STEPS + [click])
+        self.assertEqual([step["action"] for step in plan["steps"]], ["navigate", "click"])
+
+    def test_action_truncation_is_disclosed_in_plan_and_script(self):
+        events = [{"type": "click", "target": {"tag": "button", "id": "save"}}] * 250
+        plan = replay.build_plan(dict(RECORDING), events)
+        self.assertEqual(len(plan["steps"]), replay.MAX_STEPS)
+        self.assertEqual(plan["limits"]["omitted_steps"], 51)
+        self.assertTrue(plan["limits"]["truncated"])
+        self.assertIn("51 additional steps were omitted", replay.render_playwright(plan))
+
+    def test_redacted_labels_are_not_executable_handles(self):
+        for label in ("[EMAIL]", "[REDACTED]", "Open [EMAIL]"):
+            with self.subTest(label=label):
+                plan = replay.build_plan(dict(RECORDING), [
+                    {"type": "click", "target": {"tag": "button", "role": "button", "label": label}},
+                ])
+                self.assertFalse(plan["steps"][-1]["replayable"])
+                self.assertNotIn(".click()", replay.render_playwright(plan))
+
+    def test_redacted_label_can_fall_back_to_an_intact_href(self):
+        plan = replay.build_plan(dict(RECORDING), [
+            {"type": "click", "target": {"tag": "a", "label": "[EMAIL]",
+                                          "href": "https://example.test/account"}},
+        ])
+        self.assertEqual(plan["steps"][-1]["selector"]["strategy"], "href")
+
+    def test_potentially_truncated_labels_fall_back_to_an_intact_href(self):
+        for label in (("Open " * 23) + "user@example.test", "Open " * 30):
+            with self.subTest(label=label):
+                events = sanitize_events([{
+                    "type": "click", "target": {"tag": "a", "role": "link", "label": label,
+                                                  "href": "https://example.test/account"},
+                }])
+                self.assertEqual(len(events[0]["target"]["label"]), replay.MAX_LABEL)
+                plan = replay.build_plan(dict(RECORDING), events)
+                self.assertEqual(plan["steps"][-1]["selector"]["strategy"], "href")
+
 
 if __name__ == "__main__":
     unittest.main()

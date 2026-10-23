@@ -20,12 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
+- GitHub marker lookup now scans up to five pages within a shared time budget, recovering older issues and allowing creation after a complete scan beyond the first 100 entries. Incomplete or malformed scans still block creation.
+- Replay plans count actionable steps instead of diagnostics toward their limit, disclose omitted steps in both JSON and script exports, and skip selectors containing redaction placeholders.
 - The backend now redacts session identifiers in URL path segments and fragments, matching the extension. A client posting directly to the backend could previously store a session identifier that the extension would have removed.
 - The backend now stamps every capture event with a timestamp when the client omits one, instead of dropping the event's timing and leaving it out of the ticket's reproduction steps.
 - The backend no longer reads a button label from a `text` field. The extension sends the accessible name as `label` and never sends page text.
 - A draft's evidence sentence now states the scope it was drawn from. A truncated session used to report "300 recorded events" when more had been recorded; the fact was only in the machine-readable provenance.
 
 ### Security
+- Capture titles and goals are redacted before backend persistence, protecting direct uploads as well as extension uploads across the library, drafts, and exports.
 - Replay exports quote captured links as complete Python literals and keep capture identifiers inside the header comment, preventing page-controlled text from introducing statements into a generated script.
 - GitHub delivery serializes creation, retries known issue numbers directly, and records creation attempts before sending. Uncertain attempts and incomplete marker scans block further creation instead of risking duplicates.
 - Manual delivery carries the confirmed payload hash into the destination adapter. GitHub requests and receipt links retain the reviewed repository, readback checks the full review-fenced body, and HTTP error bodies cannot echo credentials into receipts.

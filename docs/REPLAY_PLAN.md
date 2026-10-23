@@ -19,6 +19,12 @@ carries a value the capture did not record.
 - **Authority.** `export_only`, `requires_review`, `execution_authorized:
   false` — the same fences every other Panther artifact carries.
 
+A plan contains at most 200 steps, including the initial navigation when
+available. Diagnostics do not consume that allowance. If additional actions
+were captured, `limits.truncated` is `true` and `limits.omitted_steps` records
+the number left out. The rendered script also discloses that count in its
+header so a partial path cannot silently look complete.
+
 ## Choosing a handle
 
 A replay only works if the control can be found again. Panther offers the
@@ -35,6 +41,12 @@ most stable handle it has, in this order:
 
 A step with no stable handle is marked `replayable: false` and is left out of
 the rendered script. Panther does not guess.
+
+Redaction placeholders such as `[EMAIL]` or `[REDACTED]` cannot identify a
+control. Panther skips handles containing these markers and tries the next
+available intact handle, such as a link URL.
+Values at their capture length limit are also skipped because they may have
+been truncated, including in the middle of a redaction marker.
 
 ## What a plan cannot do
 

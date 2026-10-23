@@ -31,10 +31,10 @@ def _text(value: Any, limit: int = MAX_LABEL) -> str:
 
 
 def _usable(value: Any) -> bool:
-    """A captured value is only usable when it was not redacted or truncated."""
+    """A captured value is only usable when it contains no redaction marker."""
     if not isinstance(value, str) or not value:
         return False
-    return not any(marker in value for marker in _REDACTED)
+    return not any(marker.casefold() in value.casefold() for marker in _REDACTED)
 
 
 def _css_attribute(attribute: str, value: str) -> str:
@@ -55,7 +55,7 @@ def _selector(target: Dict[str, Any]) -> Dict[str, Any]:
     # stand for on the page is the kebab-case form.
     for key, attribute in (("dataTicket", "data-ticket"), ("dataTab", "data-tab")):
         value = target.get(key)
-        if _usable(value) and len(value) <= MAX_VALUE:
+        if _usable(value) and len(value) < MAX_VALUE:
             return {"strategy": "test-id", "value": value, "attribute": attribute, "role": None,
                     "css": _css_attribute(attribute, value), "replayable": True}
     identifier = target.get("id")
@@ -64,16 +64,20 @@ def _selector(target: Dict[str, Any]) -> Dict[str, Any]:
                 "css": f"#{identifier}", "replayable": True}
     role = _text(target.get("role"), 40).lower()
     label = _text(target.get("label"), MAX_LABEL)
-    if role and label:
+    # Values at the capture limit may be truncated, including halfway through
+    # a redaction marker. They cannot identify the original control reliably.
+    label_usable = _usable(label) and len(target["label"]) < MAX_LABEL
+    role_usable = _usable(role) and len(target["role"]) < 40
+    if role_usable and label_usable:
         return {"strategy": "role-name", "value": label, "attribute": None, "role": role,
                 "css": None, "replayable": True}
-    if label and tag in ("button", "a"):
+    if label_usable and tag in ("button", "a"):
         return {"strategy": "text", "value": label, "attribute": None, "role": None,
                 "css": None, "replayable": True}
     href = target.get("href")
     if _usable(href) and tag == "a":
         path = sanitize_url(href)
-        if path:
+        if _usable(path) and len(path) < 1000:
             return {"strategy": "href", "value": path, "attribute": "href", "role": None,
                     "css": None, "replayable": True}
     return empty
@@ -116,25 +120,29 @@ def build_plan(recording: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[
     if start_url:
         current_url = start_url
         steps.append(_navigate_step(1, start_url))
-    for event in events[:MAX_STEPS]:
-        if not isinstance(event, dict) or len(steps) >= MAX_STEPS:
+    omitted_steps = 0
+    for event in events:
+        if not isinstance(event, dict):
             continue
+        step = None
         kind = event.get("type")
         if kind == "navigation":
             url = sanitize_url(event.get("url"))
             if url and url != current_url:
                 current_url = url
-                steps.append(_navigate_step(len(steps) + 1, url))
-            continue
-        if kind == "click":
-            steps.append(_step(len(steps) + 1, "click", event))
+                step = _navigate_step(len(steps) + 1, url)
+        elif kind == "click":
+            step = _step(len(steps) + 1, "click", event)
         elif kind == "submit":
-            steps.append(_step(len(steps) + 1, "submit", event))
+            step = _step(len(steps) + 1, "submit", event)
         elif kind == "change":
-            steps.append(_step(len(steps) + 1, "change", event,
-                               "The value of this field was never captured, so the step records that it changed, not what it became."))
-        elif kind == "diagnostic":
-            continue
+            step = _step(len(steps) + 1, "change", event,
+                         "The value of this field was never captured, so the step records that it changed, not what it became.")
+        if step is not None:
+            if len(steps) < MAX_STEPS:
+                steps.append(step)
+            else:
+                omitted_steps += 1
     return {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
@@ -154,6 +162,8 @@ def build_plan(recording: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[
             "screenshots_analyzed": False,
             "executed_by_producer": False,
             "requires_review": True,
+            "truncated": omitted_steps > 0,
+            "omitted_steps": omitted_steps,
             "note": ("Panther does not capture typed values, so this plan describes the path that was taken, "
                      "not the data that was entered. It is a proposal for a person to review."),
         },
@@ -194,6 +204,11 @@ def render_playwright(plan: Dict[str, Any]) -> str:
         f"{json.dumps(str(plan.get('recording', {}).get('id', 'unknown')))}.",
         "# This is a proposal for a person to review. Panther never runs it.",
         "# No typed value is present, because Panther never captured one.",
+    ]
+    omitted_steps = plan.get("limits", {}).get("omitted_steps", 0)
+    if type(omitted_steps) is int and omitted_steps > 0:
+        lines.append(f"# {omitted_steps} additional steps were omitted by the plan's step limit.")
+    lines += [
         "",
         "from playwright.sync_api import sync_playwright",
         "",
