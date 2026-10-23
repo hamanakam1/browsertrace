@@ -57,8 +57,8 @@ const preview = (kind = "ticket-service", extras = {}) => ({
   target: kind, target_url: deliveryDestinations.find(item => item.kind === kind).url,
   payload: {title: "Reviewed title", body: "Reviewed content"}, payload_hash: "reviewed-payload-hash", warnings: [], ...extras,
 });
-function manualDeliveryFixture() {
-  const f = fixture();
+function manualDeliveryFixture(options) {
+  const f = fixture(options);
   f.respond("GET", "integrations", () => ({destinations: deliveryDestinations}));
   f.respond("POST", "tickets/a/review", () => ({ok: true}));
   f.respond("POST", "tickets/b/review", () => ({ok: true}));
@@ -189,6 +189,91 @@ test("turning Panther off fences an already-open extension review page before th
   assert.equal(f.calls.length, count);
   assert.equal(f.get("generate").disabled, true);
   assert.match(f.get("message").textContent, /Panther is off/);
+});
+
+test("a stale On preflight cannot submit after confirmed Off, but a fresh review can recover", async () => {
+  let power = () => ({ok: true, power: {state: "on"}});
+  const f = manualDeliveryFixture({browserPower: () => power()});
+  await f.ready; await f.preview();
+  const held = deferred(); power = () => held.promise;
+  const sending = f.get("confirmSend").click(); await flush();
+  power = () => ({ok: true, power: {state: "off"}});
+  await f.visibility();
+  assert.equal(f.get("export").disabled, true);
+  held.resolve({ok: true, power: {state: "on"}}); await sending;
+  assert.equal(f.calls.filter(call => call.path.includes("/submit/")).length, 0);
+  assert.equal(f.get("export").disabled, true, "older On must not re-enable capture actions");
+  assert.equal(f.get("previewDialog").open, false);
+  assert.equal(f.get("confirmSend").disabled, true);
+  power = () => ({ok: true, power: {state: "on"}});
+  await f.visibility();
+  assert.equal(f.get("export").disabled, false);
+  await f.preview(); await f.get("confirmSend").click();
+  assert.equal(f.calls.filter(call => call.path.includes("/submit/")).length, 1);
+  assert.match(f.get("deliveryStatus").textContent, /Verified at the destination/);
+});
+
+test("closing a preview during power preflight prevents dispatch without disturbing a newer preview", async () => {
+  let power = () => ({ok: true, power: {state: "on"}});
+  const f = manualDeliveryFixture({browserPower: () => power()});
+  await f.ready; await f.preview();
+  const held = deferred(); power = () => held.promise;
+  const sending = f.get("confirmSend").click(); await flush();
+  await f.get("cancelSend").click();
+  power = () => ({ok: true, power: {state: "on"}});
+  f.choose("github"); await f.preview();
+  held.resolve({ok: true, power: {state: "on"}}); await sending;
+  assert.equal(f.calls.filter(call => call.path.includes("/submit/")).length, 0);
+  assert.equal(f.get("previewDialog").open, true);
+  assert.match(f.get("previewDestination").textContent, /remote GitHub repository/);
+  assert.equal(f.get("confirmSend").disabled, false);
+  assert.equal(f.get("deliveryStatus").textContent, "");
+  await f.get("confirmSend").click();
+  assert.equal(f.calls.filter(call => call.path === "integrations/github/submit/a").length, 1);
+});
+
+test("unavailable power status revokes an open delivery preview", async () => {
+  let power = () => ({ok: true, power: {state: "on"}});
+  const f = manualDeliveryFixture({browserPower: () => power()});
+  await f.ready; await f.preview();
+  power = () => {throw new Error("Background unavailable");};
+  await f.visibility();
+  assert.equal(f.get("previewDialog").open, false);
+  assert.equal(f.get("confirmSend").disabled, true);
+  assert.equal(f.get("export").disabled, true);
+  await f.get("confirmSend").listeners.click();
+  assert.equal(f.calls.filter(call => call.path.includes("/submit/")).length, 0);
+});
+
+test("fresh On recovery does not resume a request from before the observed power boundary", async () => {
+  let power = () => ({ok: true, power: {state: "on"}});
+  const f = fixture({browserPower: () => power()}); await f.ready;
+  f.respond("GET", "export/a", () => ({capture: capture("a")}));
+  const held = deferred(); power = () => held.promise;
+  const exporting = f.get("export").click(); await flush();
+  power = () => ({ok: true, power: {state: "off"}}); await f.visibility();
+  power = () => ({ok: true, power: {state: "on"}}); await f.visibility();
+  assert.equal(f.get("export").disabled, false);
+  held.resolve({ok: true, power: {state: "on"}}); await exporting;
+  assert.equal(f.calls.filter(call => call.path === "export/a").length, 0);
+  assert.equal(f.downloads.length, 0);
+  assert.equal(f.get("export").disabled, false);
+  await f.get("export").click();
+  assert.equal(f.downloads.length, 1);
+});
+
+test("an older Off reply cannot revoke a preview admitted by newer confirmed On", async () => {
+  let power = () => ({ok: true, power: {state: "on"}});
+  const f = manualDeliveryFixture({browserPower: () => power()}); await f.ready;
+  const held = deferred(); power = () => held.promise; await f.visibility();
+  power = () => ({ok: true, power: {state: "on"}}); await f.visibility();
+  await f.preview();
+  held.resolve({ok: true, power: {state: "off"}}); await flush();
+  assert.equal(f.get("previewDialog").open, true);
+  assert.equal(f.get("confirmSend").disabled, false);
+  assert.equal(f.get("export").disabled, false);
+  await f.get("confirmSend").click();
+  assert.equal(f.calls.filter(call => call.path.includes("/submit/")).length, 1);
 });
 
 test("status failures preserve a stale label and lock actual review controls", async () => {

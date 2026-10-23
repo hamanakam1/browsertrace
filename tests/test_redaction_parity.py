@@ -132,6 +132,10 @@ CORPUS = {
         r'JSON failed: {"password":"synthetic \"quoted\" value","status":500}',
         'Basic c3ludGhldGljOmNyZWRlbnRpYWw=',
         'Request failed: {"secret":"synthetic value without closing quote',
+        "safe " * 1638 + "ok",
+        "safe " * 1639,
+        "safe " * 24 + "😀" * 4036,
+        "safe " * 24 + "😀" * 4037,
     ],
     "payloads": [
         {"password": "x", "token": "y", "nested": {"api_key": "z"}},
@@ -147,7 +151,7 @@ class RedactionParityTests(unittest.TestCase):
     def setUpClass(cls):
         script = NODE_SCRIPT % {"module": REPO_ROOT / "extension" / "shared" / "redaction.js"}
         completed = subprocess.run(
-            ["node", "--input-type=module", "-e", script, json.dumps(CORPUS)],
+            ["node", "--input-type=module", "-e", script, json.dumps(CORPUS, ensure_ascii=False)],
             capture_output=True,
             text=True,
             check=True,
@@ -203,6 +207,30 @@ class RedactionParityTests(unittest.TestCase):
             "kind": "resource_error", "source": source}}
         clean = redaction.sanitize_capture_event(event)
         self.assertNotIn("synthetic", clean["diagnostic"]["source"])
+
+    def test_oversized_text_is_omitted_before_output_clipping(self):
+        boundary = "safe " * 1638 + "ok"
+        self.assertEqual(redaction.sanitize_text(boundary), boundary[:120])
+        astral_boundary = "safe " * 24 + "😀" * 4036
+        self.assertEqual(redaction.sanitize_text(astral_boundary), astral_boundary[:120])
+        for value in ("a" * 8193, "safe " * 14000, "safe " * 24 + "😀" * 4037):
+            with self.subTest(length=len(value)):
+                self.assertEqual(redaction.sanitize_text(value), "")
+                self.assertEqual(redaction.sanitize_text(value, 1000), "")
+        for value in (None, 42, True, ["private"], {"private": "value"}):
+            self.assertEqual(redaction.sanitize_text(value), "")
+
+    def test_direct_upload_metadata_and_diagnostics_obey_source_limit(self):
+        oversized = "safe " * 1639
+        fields = ("role", "id", "type", "dataTab", "dataTicket", "label")
+        event = {"type": "click", "ts": 1, "target": {"tag": "button", **dict.fromkeys(fields, oversized)}}
+        clean = redaction.sanitize_capture_event(event)
+        self.assertEqual(clean["target"], {"tag": "button", **dict.fromkeys(fields, "")})
+        diagnostic = {"type": "diagnostic", "ts": 1, "diagnostic": {
+            "kind": "http_error", "status": 500, "message": oversized}}
+        self.assertEqual(redaction.sanitize_capture_event(diagnostic)["diagnostic"], {"kind": "http_error", "status": 500})
+        diagnostic["diagnostic"] = {"kind": "unhandled_rejection", "message": oversized}
+        self.assertIsNone(redaction.sanitize_capture_event(diagnostic))
 
     def test_page_text_is_never_read_from_a_text_field(self):
         """The extension sends an accessible name as "label" and never page text."""

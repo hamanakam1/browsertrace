@@ -136,6 +136,8 @@ While Panther is on, opted-in automated sessions also retry stopped uploads auto
 
 Backend captures have a 30-day retention limit and a cap of 200 records, enforced when storage is accessed. **Delete capture** removes its local capture artifacts, saved drafts, and automation job. It stops remaining delivery, but cannot retract a request already in flight. It does not remove downloaded exports, browser consent history, already submitted dashboard tickets, or delivery receipts. Receipts retain capture identity, a content hash, target, ticket ID, and delivery state to prevent duplicate submissions; they do not retain the full captured evidence. Content-free cancellation markers prevent late uploads from reviving withdrawn delivery consent; their expiry is documented in the [automation contract](docs/AUTOMATION.md).
 
+A malformed capture manifest blocks library reads and writes before retention cleanup. Duplicate JSON fields and nonfinite numbers are rejected, preserving the manifest and capture files for recovery; Panther does not guess which conflicting value is correct or repair the file automatically.
+
 The backend binds to `127.0.0.1`. Its origin and request-header checks are browser request protections, not user authentication. Treat this as a local single-user tool; do not expose the port publicly or use the header as an access token.
 
 ## Development and verification

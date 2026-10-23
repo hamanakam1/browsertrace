@@ -64,3 +64,31 @@ test("captured text removes embedded URL credentials and quoted credential value
   assert.match(sanitizeText('JSON failed: {"password":"synthetic-password","status":500}', 300), /"status":500/);
   assert.equal(sanitizeText('Basic c3ludGhldGljOmNyZWRlbnRpYWw='), '[REDACTED]');
 });
+
+test("text redaction omits oversized source values before applying its output limit", () => {
+  const boundary = "safe ".repeat(1638) + "ok";
+  assert.equal(boundary.length, 8192);
+  assert.equal(sanitizeText(boundary, 120), boundary.slice(0, 120));
+  const astralBoundary = "safe ".repeat(24) + "😀".repeat(4036);
+  assert.equal(astralBoundary.length, 8192);
+  assert.equal(sanitizeText(astralBoundary), astralBoundary.slice(0, 120));
+  for (const oversized of ["a".repeat(8193), "safe ".repeat(14000), "safe ".repeat(24) + "😀".repeat(4037)]) {
+    assert.equal(sanitizeText(oversized, 120), "");
+    assert.equal(sanitizeText(oversized, 1000), "");
+  }
+  for (const value of [null, undefined, 42, true, ["private"], { toString() { throw new Error("Untrusted coercion"); } }]) {
+    assert.equal(sanitizeText(value), "");
+  }
+});
+
+test("direct capture metadata and diagnostic text cannot bypass the source limit", () => {
+  const oversized = "safe ".repeat(1639);
+  const target = { tag: "button", label: oversized };
+  for (const key of ["role", "id", "type", "dataTab", "dataTicket"]) target[key] = oversized;
+  const clean = sanitizeCaptureEvent({ type: "click", target }, 1);
+  assert.equal(clean.target.tag, "button");
+  for (const key of ["role", "id", "type", "dataTab", "dataTicket", "label"]) assert.equal(clean.target[key], "");
+  const diagnostic = sanitizeCaptureEvent({ type: "diagnostic", diagnostic: { kind: "http_error", status: 500, message: oversized } }, 1);
+  assert.deepEqual(diagnostic.diagnostic, { kind: "http_error", status: 500 });
+  assert.equal(sanitizeCaptureEvent({ type: "diagnostic", diagnostic: { kind: "unhandled_rejection", message: oversized } }, 1), null);
+});

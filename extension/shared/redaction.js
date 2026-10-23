@@ -51,7 +51,10 @@ export function sanitizeUrl(value) {
 }
 
 export function sanitizeText(value, max = 120) {
-  return String(value ?? "")
+  // Bound work before any regex sees page-controlled text. Omit oversized
+  // values whole: clipping first can leave an unrecognizable secret prefix.
+  if (typeof value !== "string" || value.length > 8192) return "";
+  return value
     // Error messages and accessible names can embed complete URLs. Apply the
     // URL policy before email/token matching can split their credentials.
     .replace(/https?:\/\/[^\s<>"'`]+/gi, (url) => sanitizeUrl(url) || "[URL]")

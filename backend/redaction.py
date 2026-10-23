@@ -109,7 +109,12 @@ def sanitize_event_payload(payload: Any) -> Any:
 
 
 def sanitize_text(value: Any, limit: int = 120) -> str:
-    if not isinstance(value, str):
+    # Bound regex work even for a direct upload. Omit the whole value rather
+    # than clipping through a secret. Match JavaScript's UTF-16 length for
+    # astral characters; the first check bounds the encoding allocation.
+    if not isinstance(value, str) or len(value) > 8192:
+        return ""
+    if len(value.encode("utf-16-le", errors="surrogatepass")) > 16384:
         return ""
     # Sanitize embedded URLs before email/token matching can split credentials.
     text = re.sub(r'''https?://[^\s<>"'`]+''',

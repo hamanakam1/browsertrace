@@ -126,6 +126,8 @@ The adapter respects the dashboard's 200-character title and 4000-character deta
 
 Manual submission requires a review confirmation tied to the current preview hash, including its destination URL, exact outbound payload, and full reviewed draft. Changing the destination or payload requires a new preview. Separately opted-in [automatic sessions](AUTOMATION.md) instead freeze a bounded delivery policy in the extension at capture Start. The backend admits that original policy on upload and freezes generated proposals before sending; it does **not** claim a human reviewed those proposals. Both paths use the same adapter and delivery identity. The backend verifies the returned item number, capture identity, source, content, backlog status, and review tags before first reporting `delivered`. HTTP 200 or `ok: true` alone is insufficient: the dashboard can return a null item when intake is paused or capped.
 
+Destination readback must return an integer item ID and review tags as either a list of strings or a comma-separated string. Mappings, mixed-type lists, boolean IDs and other malformed shapes remain unverified even when they contain the expected words.
+
 ### Delivery outcomes and retry behavior
 
 | State | Meaning | Next action |
@@ -186,6 +188,8 @@ Review and preview bodies use:
 ```
 
 Manual submit repeats the reviewed body and adds `"confirmed": true` plus the exact `"payload_hash"` returned by preview. Changing the content invalidates that preview. The shipped UI handles this sequence; custom clients must preserve the same explicit review gate, or use the separately consented automatic-session contract. Automation must never be inferred from capture consent alone.
+
+The extension review page rechecks that the same preview is still confirmed after its browser-power check and before dispatch. Closing the preview or observing Off/unknown power cancels a submission still waiting at that check. A later On response cannot revive that old confirmation; review and confirm again. Closing a preview cannot retract a request already dispatched.
 
 Both built-in destinations perform a final capture-existence check before a
 new manual delivery request is dispatched. If a request waits in the adapter

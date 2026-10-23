@@ -412,11 +412,13 @@ def _verify(target: str, item: int, payload: dict) -> None:
     tags = data.get("tags", [])
     if isinstance(tags, str):
         tags = [tag.strip() for tag in tags.split(",")]
-    if (data.get("key") != f"M-{item}" or data.get("id") != item
+    if (data.get("key") != f"M-{item}" or type(data.get("id")) is not int or data["id"] != item
             or data.get("seed_key") != payload["seed_key"] or data.get("source") != SOURCE):
         raise ValueError("Dashboard readback did not confirm the exact capture identity; delivery remains pending.")
     if (data.get("title") != payload["title"] or data.get("detail") != payload["detail"]
-            or data.get("native_status") != "backlog" or "no-auto" not in tags or "auto" in tags
+            or data.get("native_status") != "backlog"
+            or not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags)
+            or "no-auto" not in tags or "auto" in tags
             or "needs-triage" not in tags):
         raise ValueError("Dashboard ticket content or review fences differ; it was not updated. Review the existing ticket.")
 

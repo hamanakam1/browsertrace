@@ -79,6 +79,41 @@ class StorageTests(unittest.TestCase):
             self.create()
         self.assertEqual(storage.MANIFEST_FILE.read_text(), "invalid JSON")
 
+    def test_duplicate_manifest_fields_preserve_the_library_and_artifacts(self):
+        storage.ensure_dirs()
+        events = storage.EVENTS_DIR / "ambiguous.json"
+        rid = self.create(events_path=events)
+        entry = storage._load_manifest()[rid]
+        expired = {**entry, "created_at": time.time() - storage.TTL_SECONDS - 10}
+        entry_json = json.dumps(entry)
+        duplicate_time = entry_json[:-1] + ', "created_at": ' + str(expired["created_at"]) + "}"
+        duplicate_delete = entry_json[:-1] + ', "_deleting": false, "_deleting": true}'
+        ambiguous = [
+            "{" + json.dumps(rid) + ":" + entry_json + "," + json.dumps(rid) + ":" + json.dumps(expired) + "}",
+            "{" + json.dumps(rid) + ":" + duplicate_time + "}",
+            "{" + json.dumps(rid) + ":" + duplicate_delete + "}",
+        ]
+        for case, raw in enumerate(ambiguous):
+            for operation in (storage.list_recordings, lambda: self.create("new-session")):
+                with self.subTest(case=case, operation=operation.__name__):
+                    events.write_bytes(b"recoverable synthetic capture")
+                    storage.MANIFEST_FILE.write_text(raw)
+                    with self.assertRaisesRegex(ValueError, "manifest"):
+                        operation()
+                    self.assertEqual(storage.MANIFEST_FILE.read_text(), raw)
+                    self.assertEqual(events.read_bytes(), b"recoverable synthetic capture")
+
+    def test_nonfinite_manifest_values_are_preserved_without_rewriting(self):
+        rid = self.create()
+        entry = json.dumps(storage._load_manifest()[rid])
+        for constant in ("NaN", "Infinity", "-Infinity", "1e400", "-1e400"):
+            with self.subTest(constant=constant):
+                raw = "{" + json.dumps(rid) + ":" + entry[:-1] + ', "extra": ' + constant + "}}"
+                storage.MANIFEST_FILE.write_text(raw)
+                with self.assertRaisesRegex(ValueError, "manifest"):
+                    storage.list_recordings()
+                self.assertEqual(storage.MANIFEST_FILE.read_text(), raw)
+
     def test_retention_does_not_delete_artifacts_from_corrupt_metadata(self):
         storage.ensure_dirs()
         events = storage.EVENTS_DIR / "retained.json"

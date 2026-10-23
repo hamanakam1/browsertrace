@@ -252,11 +252,30 @@ def get_inference_result(recording_id: str) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text())
 
 
+def _manifest_object(pairs: List[tuple[str, Any]]) -> Dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate capture manifest fields; stored artifacts were preserved")
+        result[key] = value
+    return result
+
+
+def _manifest_number(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Nonfinite capture manifest value; stored artifacts were preserved")
+    return number
+
+
 def _load_manifest() -> Dict[str, Any]:
     if not MANIFEST_FILE.exists():
         return {}
     # Corruption must not silently erase the library on the next save.
-    payload = json.loads(MANIFEST_FILE.read_text())
+    # Ambiguous fields must not choose a deletion flag or retention timestamp
+    # by JSON key order. Validate before any cleanup or replacement write.
+    payload = json.loads(MANIFEST_FILE.read_text(), object_pairs_hook=_manifest_object,
+                         parse_constant=_manifest_number, parse_float=_manifest_number)
     if not isinstance(payload, dict):
         raise ValueError("Invalid capture manifest")
     # Retention must never infer a missing/invalid timestamp as epoch zero and

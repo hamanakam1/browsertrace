@@ -4,6 +4,9 @@ import { automationView, safeTicketURL } from "./automation-state.js";
 const origin = location.protocol === "chrome-extension:" ? BACKEND_ORIGIN : location.origin;
 const browserControlled = location.protocol === "chrome-extension:";
 let browserPowerOn = !browserControlled;
+let powerRequest = 0;
+let powerResponse = 0;
+let powerGeneration = 0;
 const $ = id => document.getElementById(id);
 let selected = null;
 let recordings = [];
@@ -34,15 +37,35 @@ function invalidatePreview() {
   $("confirmSend").disabled = true;
   if ($("previewDialog").open) $("previewDialog").close();
 }
-async function api(path, body, method = body === undefined ? "GET" : "POST") {
+async function api(path, body, method = body === undefined ? "GET" : "POST", stillAllowed = () => true) {
   if (browserControlled) {
+    const request = ++powerRequest, generation = powerGeneration;
+    let on = false;
     try {
       const state = await chrome.runtime.sendMessage({type: "extension.getPowerState"});
-      browserPowerOn = state?.ok === true && state.power?.state === "on";
-    } catch (_) { browserPowerOn = false; }
-    syncDraftControls();
-    if (!browserPowerOn) throw new Error("Panther is off. Turn Panther on from its browser popup, then refresh this page.");
+      on = state?.ok === true && state.power?.state === "on";
+    } catch (_) { /* An unavailable runtime never grants request admission. */ }
+    if (request > powerResponse) {
+      powerResponse = request;
+      if (!on) {
+        ++powerGeneration;
+        browserPowerOn = false;
+        invalidatePreview();
+        message("Panther is off or its runtime status is unavailable. Turn Panther on from its browser popup, then refresh this page.", true);
+      } else if (generation === powerGeneration) {
+        browserPowerOn = true;
+      }
+      syncDraftControls();
+    }
+    // Concurrent confirmed-On reads remain usable, but no request admitted
+    // before an observed Off/unknown state may resume after that boundary.
+    if (!on || !browserPowerOn || generation !== powerGeneration) {
+      throw new Error("Panther is off or its runtime state changed. Turn Panther on from its browser popup, then refresh this page.");
+    }
   }
+  // Browser messaging is asynchronous: closing or replacing a confirmation
+  // while it waits must prevent a request that has not yet been dispatched.
+  if (!stillAllowed()) throw new Error("This request was cancelled or superseded. Review again before continuing.");
   const response = await fetch(origin + "/api/extension/" + path, {
     method, headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
@@ -440,7 +463,7 @@ $("confirmSend").addEventListener("click", async () => {
   $("deliveryStatus").textContent = "Sending and verifying at " + pending.preview.target_url + "…";
   try {
     const {id, kind, body, preview} = pending;
-    const result = await api("integrations/" + encodeURIComponent(kind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    const result = await api("integrations/" + encodeURIComponent(kind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash}, "POST", () => activePreview === pending);
     if (activePreview !== pending) return;
     if (result.verified === true) {
       const verifiedAt = result.receipt?.verified_at;

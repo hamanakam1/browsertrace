@@ -298,6 +298,64 @@ class IntegrationsTests(unittest.TestCase):
         self.assertEqual(second["state"], "pending")
         self.assertEqual(len(self.server.state["posts"]), 1)
 
+    def test_readback_identity_requires_an_integer_not_equal_coercible_values(self):
+        for index, item in enumerate((True, 1.0, "1", None)):
+            with self.subTest(item=item, item_type=type(item).__name__):
+                ticket = {**self.ticket, "id": f"identity-{index}"}
+                payload = integrations.preview_ticket(self.recording, ticket)["payload"]
+                readback = {**payload, "key": "M-1", "id": item, "native_status": "backlog"}
+                with patch.object(integrations, "_request", side_effect=[
+                    {"ok": True, "item": 1, "created": True}, readback,
+                ]) as request:
+                    result = integrations.submit_ticket(self.recording, ticket)
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(result["state"], "pending")
+                self.assertFalse(result["verified"])
+                receipt = integrations.preview_ticket(self.recording, ticket)["receipt"]
+                self.assertEqual(receipt["state"], "pending")
+                self.assertIs(receipt["verified"], False)
+                self.assertEqual(receipt["item"], 1)
+
+    def test_readback_rejects_malformed_tag_values_without_verifying_receipts(self):
+        malformed = ({"no-auto": False, "needs-triage": False}, True, None, 1,
+                     ["no-auto", "needs-triage", False], ["no-auto", "needs-triage", {}])
+        for index, tags in enumerate(malformed):
+            with self.subTest(tags=tags):
+                ticket = {**self.ticket, "id": f"tags-{index}"}
+                payload = integrations.preview_ticket(self.recording, ticket)["payload"]
+                readback = {**payload, "key": "M-1234", "id": 1234,
+                            "native_status": "backlog", "tags": tags}
+                with patch.object(integrations, "_request", side_effect=[
+                    {"ok": True, "item": 1234, "created": True}, readback,
+                ]) as request:
+                    result = integrations.submit_ticket(self.recording, ticket)
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(result["state"], "pending")
+                self.assertFalse(result["verified"])
+                receipt = integrations.preview_ticket(self.recording, ticket)["receipt"]
+                self.assertEqual(receipt["state"], "pending")
+                self.assertIs(receipt["verified"], False)
+                self.assertEqual(receipt["item"], 1234)
+
+    def test_readback_accepts_integer_identity_with_supported_tag_formats(self):
+        for index, tags in enumerate((["panther", "needs-triage", "no-auto"],
+                                      "panther, needs-triage, no-auto")):
+            with self.subTest(tags=tags):
+                ticket = {**self.ticket, "id": f"valid-tags-{index}"}
+                payload = integrations.preview_ticket(self.recording, ticket)["payload"]
+                readback = {**payload, "key": "M-1", "id": 1,
+                            "native_status": "backlog", "tags": tags}
+                with patch.object(integrations, "_request", side_effect=[
+                    {"ok": True, "item": 1, "created": True}, readback,
+                ]) as request:
+                    result = integrations.submit_ticket(self.recording, ticket)
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(result["state"], "delivered")
+                self.assertIs(result["verified"], True)
+                receipt = integrations.preview_ticket(self.recording, ticket)["receipt"]
+                self.assertEqual(receipt["state"], "delivered")
+                self.assertIs(receipt["verified"], True)
+
     def test_redirects_are_not_followed_for_health_or_writes(self):
         self.server.state["redirect"] = True
         result = integrations.dashboard_status()

@@ -12,7 +12,10 @@ Panther's status window explains a consented capture as it happens. Turning Pant
 The projection inspects at most the last 30 stored events and displays at most 12 sanitized observations. Event numbers refer to the original capture. It does not expose typed keys, field values, arbitrary event objects, screenshot pixels, or full page text. Sanitization reduces exposure but does not guarantee that a control label, route, or user-written goal contains no private information.
 
 Button and link labels are redacted before their stored length limit is
-applied. Oversized labels are omitted as a whole. The live view also checks
+applied. Capture text and control metadata exceeding 8,192 UTF-16 code units
+are omitted as a whole before pattern matching; the stored field limits remain
+smaller. The same input bound applies to direct backend event uploads. This
+bounds each redaction input, not the time of an entire capture. The live view also checks
 restored data again, omitting oversized text and sanitizing complete URLs
 before shortening their display; truncation must not expose part of a secret.
 URLs already at the stored 1,000-character limit are omitted from the live

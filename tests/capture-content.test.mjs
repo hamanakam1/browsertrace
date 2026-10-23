@@ -188,6 +188,32 @@ test("oversized control labels are omitted without losing the control or reading
   assert.equal(f.events().at(-1).payload.target.label, "");
 });
 
+test("oversized control metadata is omitted before messaging for semantic and inert controls", () => {
+  const f = fixture(); f.start();
+  const oversized = "a".repeat(65536);
+  const button = new Element("button");
+  button.id = oversized;
+  button.textContent = "Save";
+  for (const attribute of ["role", "type", "data-tab", "data-ticket"]) button.setAttribute(attribute, oversized);
+  f.dispatch("click", button);
+  const target = f.events().at(-1).payload.target;
+  assert.equal(target.tag, "button");
+  assert.equal(target.label, "Save");
+  for (const key of ["role", "id", "type", "dataTab", "dataTicket"]) assert.equal(target[key], "");
+  const inert = new Element("div");
+  inert.control = false;
+  inert.id = oversized;
+  inert.setAttribute("role", oversized);
+  f.dispatch("click", inert);
+  const inertTarget = f.events().at(-1).payload.target;
+  assert.equal(inertTarget.inert, true);
+  assert.equal(inertTarget.id, "");
+  assert.equal(inertTarget.role, "");
+  button.id = "safe ".repeat(1638) + "ok";
+  f.dispatch("click", button);
+  assert.equal(f.events().at(-1).payload.target.id, button.id);
+});
+
 test("hash and pushState-style route changes are captured once with private query removed", () => {
   const f = fixture(); f.start();
   f.context.location.href = "http://127.0.0.1:8080/?token=secret#work-board";

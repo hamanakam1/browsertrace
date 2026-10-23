@@ -36,6 +36,12 @@
   const CONTROLS = "button,a,input,select,textarea,[role=button],[role=tab],[data-tab],[data-ticket]";
   const SEMANTIC = CONTROLS + ",form";
 
+  // Page-controlled attributes need the same source bound as labels before
+  // IPC, even though the background also limits text before redaction.
+  function boundedText(value) {
+    return typeof value === "string" && value.length <= 8192 ? value : "";
+  }
+
   /**
    * Does an element present itself as interactive?
    *
@@ -67,9 +73,9 @@
         chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload: {
           type: "click", ts: Date.now(), url: safeUrl(location.href),
           target: {
-            tag: String(element.tagName || "").toLowerCase().slice(0, 40),
-            role: element.getAttribute("role") || "",
-            id: element.id || "",
+            tag: boundedText(element.tagName).toLowerCase().slice(0, 40),
+            role: boundedText(element.getAttribute("role")),
+            id: boundedText(element.id),
             inert: true
           }
         } }).catch(() => { /* The background may have gone away; the page keeps working. */ });
@@ -78,21 +84,21 @@
     }
     const payload = { type, ts: Date.now(), url: safeUrl(location.href) };
     if (semantic) {
-      const tag = semantic.tagName.toLowerCase();
+      const tag = boundedText(semantic.tagName).toLowerCase();
       // Never inspect input values, typed keys, page body text, or editable text.
       const hasEditableContent = semantic.isContentEditable || semantic.querySelector("input,textarea,select,[contenteditable],[role=textbox]");
       const rawLabel = ["button", "a"].includes(tag) && !hasEditableContent ?
-        (semantic.getAttribute("aria-label") || semantic.textContent || "").trim() : "";
+        (semantic.getAttribute("aria-label") || semantic.textContent || "") : "";
       // Preserve recognizable email/credential shapes until background
       // redaction applies the 120-character stored limit. Omit oversized
       // labels rather than retaining an unrecognizable private prefix.
-      const label = rawLabel.length <= 8192 ? rawLabel : "";
+      const label = boundedText(rawLabel).trim();
       payload.target = {
-        tag, role: semantic.getAttribute("role") || "", id: semantic.id || "",
-        type: semantic.getAttribute("type") || "", label,
+        tag, role: boundedText(semantic.getAttribute("role")), id: boundedText(semantic.id),
+        type: boundedText(semantic.getAttribute("type")), label,
         href: tag === "a" ? safeUrl(semantic.href) : "",
-        dataTab: semantic.getAttribute("data-tab") || "",
-        dataTicket: semantic.getAttribute("data-ticket") || ""
+        dataTab: boundedText(semantic.getAttribute("data-tab")),
+        dataTicket: boundedText(semantic.getAttribute("data-ticket"))
       };
       // The click landed on something the page never marked as a control.
       if (!control && type === "click" && presentsAsInteractive(target)) payload.target.inert = true;
