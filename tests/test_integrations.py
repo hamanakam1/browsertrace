@@ -1,5 +1,6 @@
 """Synthetic loopback contract tests; never contact the operator dashboard."""
 
+import contextlib
 import json
 import io
 import os
@@ -275,6 +276,38 @@ class IntegrationsTests(unittest.TestCase):
                 self.assertEqual(result["state"], "refused")
                 self.assertFalse(result["ok"])
                 self.assertEqual(self.server.state["gets"], [])
+
+    def test_destination_refusal_details_never_reach_results_receipts_or_logs(self):
+        canaries = ("synthetic-destination-token", "synthetic-private-account")
+        remote_errors = (
+            f"token={canaries[0]} account={canaries[1]}",
+            {"details": {"credential": canaries[0], "account": canaries[1]}},
+        )
+        for index, remote_error in enumerate(remote_errors):
+            for accepted in (False, True):
+                with self.subTest(remote_error=remote_error, accepted=accepted):
+                    self.server.state["response_override"] = {
+                        "ok": accepted, "item": "invalid-item", "created": False,
+                        "error": remote_error,
+                    }
+                    ticket = {**self.ticket, "id": f"private-error-{index}-{accepted}"}
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                            self.assertNoLogs(level="DEBUG"):
+                        result = integrations.submit_ticket(self.recording, ticket)
+                        preview = integrations.preview_ticket(self.recording, ticket)
+                    self.assertEqual(result["state"], "refused")
+                    self.assertFalse(result["ok"])
+                    self.assertFalse(result["verified"])
+                    self.assertNotIn("item", result["receipt"])
+                    receipt_path = integrations._receipt_path(self.url, preview["seed_key"])
+                    surfaces = (json.dumps(result), json.dumps(preview), receipt_path.read_text(),
+                                stdout.getvalue(), stderr.getvalue())
+                    for surface in surfaces:
+                        for canary in canaries:
+                            self.assertNotIn(canary, surface)
+        self.assertEqual(len(self.server.state["posts"]), 4)
+        self.assertEqual(self.server.state["gets"], [])
 
     def test_readback_wrong_identity_or_missing_fence_remains_pending(self):
         self.server.state["mismatch"] = True

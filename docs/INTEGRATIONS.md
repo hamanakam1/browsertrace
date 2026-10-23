@@ -135,6 +135,11 @@ A reused delivered receipt returns `previously_verified: true` and retains its o
 
 Receipts are private JSON files under `PANTHER_DATA_DIR/deliveries/`, written atomically before the request. They retain the target, seed, content hash, state, and returned item metadata. A receipt write failure prevents the initial POST. Receipts remain after deleting a capture so a later duplicate attempt can still be recognized. Capture deletion does not delete dashboard tickets, exports downloaded elsewhere, or these receipts. Removing a receipt is not a supported ticket-delete or ticket-update operation.
 
+Refusal receipts contain a fixed local diagnostic. Arbitrary destination error
+text is not copied into receipts, previews, or results because it may contain
+credentials or private account details. Inspect the destination directly to
+resolve an intake refusal. Existing receipt files are not retroactively scrubbed.
+
 ## Panther HTTP API
 
 The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API routes begin with `/api/extension/`.

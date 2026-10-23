@@ -452,9 +452,9 @@ def submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_p
                 response = _request(target, "/api/master/add", payload, before_send=before_send)
                 item = response.get("item")
                 if response.get("ok") is not True or type(item) is not int or item <= 0:
+                    # Destination validation errors can include credentials or
+                    # private account details; retain only the local diagnosis.
                     receipt.update(state="refused", error="Dashboard did not return a valid ticket ID; intake may be paused or capped.")
-                    if response.get("error"):
-                        receipt["error"] += " " + _text(response["error"], 180)
                     storage.write_json(path, receipt)
                     return _result(receipt)
                 if type(response.get("created")) is not bool:
