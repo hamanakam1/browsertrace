@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,9 @@ class FakeGitHub(BaseHTTPRequestHandler):
                 return self.reply(404, {"message": "Not Found"})
             return self.reply(200, {"full_name": REPO, "private": False})
         if self.path.startswith(f"/repos/{REPO}/issues?"):
+            if "issue_pages" in state:
+                page = int(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("page", ["1"])[0])
+                return self.reply(200, state["issue_pages"].get(page, []))
             return self.reply(200, state.get("listed_issues", list(state["issues"].values())))
         if self.path.startswith(f"/repos/{REPO}/issues/"):
             number = int(self.path.rsplit("/", 1)[-1])
@@ -257,11 +261,61 @@ class GitHubDestinationTests(unittest.TestCase):
     def test_a_full_recent_issue_page_does_not_prove_the_identity_is_absent(self):
         self.server.state["listed_issues"] = [
             {"number": number, "body": "Unrelated issue", "state": "open"}
-            for number in range(1, github.MAX_ISSUES_SCANNED + 1)
+            for number in range(1, 101)
         ]
         result = github.submit_ticket(self.recording, self.ticket)
         self.assertFalse(result["ok"], result)
         self.assertEqual(self.server.state["posts"], [])
+        self.assertEqual(len(self.server.state["gets"]), github.MAX_ISSUES_SCANNED // github.ISSUES_PER_PAGE)
+
+    def test_marker_lookup_recovers_an_issue_on_a_later_page(self):
+        body = github.preview_ticket(self.recording, self.ticket)["payload"]["body"]
+        existing = {"number": 42, "title": self.ticket["title"], "body": body, "state": "open"}
+        self.server.state["issues"][42] = existing
+        self.server.state["issue_pages"] = {
+            1: [{"number": number, "body": "Unrelated", "state": "open"} for number in range(100, 200)],
+            2: [existing],
+        }
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ticket_key"], "#42")
+        self.assertEqual(self.server.state["posts"], [])
+        self.assertEqual(len(self.server.state["gets"]), 3)
+
+    def test_creation_can_follow_a_complete_multi_page_scan(self):
+        self.server.state["issue_pages"] = {
+            1: [{"number": number, "body": None, "pull_request": {}} for number in range(100, 200)],
+            2: [{"number": 99, "body": "Unrelated", "state": "closed"}],
+        }
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(self.server.state["posts"]), 1)
+        self.assertTrue(any("page=2" in path for path in self.server.state["gets"]))
+
+    def test_malformed_issue_entries_never_establish_absence(self):
+        for entry in (None, {"number": True}, {"number": 1, "body": []}):
+            with self.subTest(entry=entry), patch.object(github, "_request", return_value=[entry]):
+                with self.assertRaisesRegex(ValueError, "unexpected issue"):
+                    github._find_existing("synthetic-identity", REPO)
+
+    def test_marker_scan_stops_after_the_time_budget(self):
+        full_page = [{"number": number, "body": "Unrelated"} for number in range(1, 101)]
+        with patch.object(github, "_request", return_value=full_page) as request, \
+                patch.object(github.time, "monotonic", side_effect=[100, 101, 116]):
+            with self.assertRaisesRegex(ValueError, "time budget expired"):
+                github._find_existing("synthetic-identity", REPO)
+        request.assert_called_once()
+        self.assertEqual(request.call_args.kwargs["timeout"], 14)
+
+    def test_a_malformed_later_page_prevents_creation(self):
+        self.server.state["issue_pages"] = {
+            1: [{"number": number, "body": "Unrelated"} for number in range(100, 200)],
+            2: {"message": "Unexpected shape"},
+        }
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(self.server.state["posts"], [])
+        self.assertEqual(len(self.server.state["gets"]), 2)
 
     def test_readback_must_match_the_complete_review_fenced_body(self):
         preview = github.preview_ticket(self.recording, self.ticket)

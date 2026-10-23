@@ -33,7 +33,9 @@ KIND = "github"
 FENCE = integrations.FENCE
 REQUEST_TIMEOUT = 15
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-MAX_ISSUES_SCANNED = 100
+ISSUES_PER_PAGE = 100
+MAX_ISSUES_SCANNED = 500
+SCAN_TIMEOUT = 15
 _LABEL = "panther"
 _REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,38})\Z")
 
@@ -95,7 +97,8 @@ def target() -> str:
     return f"{API_HOST}/repos/{repo}"
 
 
-def _request(path: str, payload: Optional[dict] = None, *, before_send=None) -> dict:
+def _request(path: str, payload: Optional[dict] = None, *, before_send=None,
+             timeout: float = REQUEST_TIMEOUT) -> dict:
     """One authenticated GitHub request. The token never appears in a result."""
     token = _token()
     if not _valid_token(token):
@@ -115,7 +118,7 @@ def _request(path: str, payload: Optional[dict] = None, *, before_send=None) -> 
         if before_send is not None:
             before_send()
     try:
-        response = opener.open(request, timeout=REQUEST_TIMEOUT)
+        response = opener.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         status = exc.code
         exc.close()
@@ -227,18 +230,34 @@ def preview_ticket(recording: dict, ticket: dict) -> Dict[str, Any]:
 
 
 def _find_existing(seed: str, repo: str) -> Optional[dict]:
-    """Find an issue that already carries this identity, if one exists."""
-    issues = _request(f"/repos/{repo}/issues?state=all&per_page={MAX_ISSUES_SCANNED}&sort=created&direction=desc")
-    if not isinstance(issues, list):
-        raise ValueError("GitHub returned an unexpected issue list")
-    for issue in issues:
-        if not isinstance(issue, dict) or "pull_request" in issue:
-            continue
-        if isinstance(issue.get("body"), str) and f"Identity: {seed}" in issue["body"].splitlines():
-            return issue
-    if len(issues) >= MAX_ISSUES_SCANNED:
-        raise ValueError("The recent issue scan is incomplete; review the destination before creating an issue")
-    return None
+    """Find a marker within a bounded, paginated scan of the pinned repository."""
+    deadline = time.monotonic() + SCAN_TIMEOUT
+    for page in range(1, MAX_ISSUES_SCANNED // ISSUES_PER_PAGE + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("The issue scan time budget expired; no creation was attempted")
+        # Construct every page locally. Never follow an arbitrary pagination URL
+        # returned by a remote response with the configured credential.
+        issues = _request(
+            f"/repos/{repo}/issues?state=all&per_page={ISSUES_PER_PAGE}&sort=created&direction=desc&page={page}",
+            timeout=min(REQUEST_TIMEOUT, remaining),
+        )
+        if time.monotonic() >= deadline:
+            raise ValueError("The issue scan time budget expired; no creation was attempted")
+        if not isinstance(issues, list) or len(issues) > ISSUES_PER_PAGE:
+            raise ValueError("GitHub returned an unexpected issue list")
+        for issue in issues:
+            if (not isinstance(issue, dict) or type(issue.get("number")) is not int
+                    or issue["number"] <= 0
+                    or (issue.get("body") is not None and not isinstance(issue["body"], str))):
+                raise ValueError("GitHub returned an unexpected issue entry")
+            if "pull_request" in issue:
+                continue
+            if isinstance(issue.get("body"), str) and f"Identity: {seed}" in issue["body"].splitlines():
+                return issue
+        if len(issues) < ISSUES_PER_PAGE:
+            return None
+    raise ValueError("The issue scan reached its entry limit; review the destination before creating an issue")
 
 
 def _verify(seed: str, issue: dict, payload: dict, expected_item: int) -> None:

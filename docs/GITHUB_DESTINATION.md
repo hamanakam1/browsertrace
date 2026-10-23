@@ -66,10 +66,15 @@ treated as uncertain. Inspect the destination to resolve these cases; repeated
 retries do not grant permission to duplicate the issue. This conservative rule
 also applies after an HTTP rejection of a creation request.
 
-Marker lookup reads at most the 100 most recent issues and pull requests. If
-that page is full and has no matching marker, creation remains pending because
-the bounded scan cannot establish absence. This also limits first delivery to
-repositories with a full recent page. Keep the receipt store: separate backend
+Marker lookup reads up to five pages of 100 issues and pull requests, following
+GitHub's [documented issue-list pagination](https://docs.github.com/en/rest/issues/issues#list-repository-issues).
+It stops when it finds the marker or reaches a short page. A full 500-entry scan
+without the marker remains pending because the bounded scan cannot establish
+absence. Each request uses the remaining portion of a 15-second scan budget as
+its timeout; results that arrive after that budget expires are rejected and
+no further page or creation is requested. Malformed pages also block creation.
+Every page URL is constructed for the pinned repository, so remote pagination
+links cannot redirect the credential. Keep the receipt store: separate backend
 processes or independently copied stores do not share a creation lock.
 
 If the same identity is submitted with **different** content, the result is a
