@@ -53,6 +53,25 @@ GitHub's issue API has no idempotency key, so Panther uses two mechanisms:
 The marker is `panther-capture-<recording-id>-<draft-id>`. It is the
 identity of one draft of one capture.
 
+Submissions are serialized within one backend process. When a receipt already
+contains an issue number, retries read that issue directly; it need not remain
+among the recent issues. The readback must match the exact issue number, title,
+and complete body, including the review fence.
+
+Before a creation request is sent, the receipt records that an attempt may have
+reached GitHub. If the response is lost, a retry can recover the issue by its
+marker, but it cannot send another creation request when the outcome remains
+uncertain. A pending receipt from an older version with no issue number is also
+treated as uncertain. Inspect the destination to resolve these cases; repeated
+retries do not grant permission to duplicate the issue. This conservative rule
+also applies after an HTTP rejection of a creation request.
+
+Marker lookup reads at most the 100 most recent issues and pull requests. If
+that page is full and has no matching marker, creation remains pending because
+the bounded scan cannot establish absence. This also limits first delivery to
+repositories with a full recent page. Keep the receipt store: separate backend
+processes or independently copied stores do not share a creation lock.
+
 If the same identity is submitted with **different** content, the result is a
 `conflict`, not an update. An existing issue is never silently rewritten.
 Making a deliberate edit to a delivered issue is a separate operation that
@@ -63,8 +82,7 @@ Panther does not perform.
 | State | Meaning |
 |---|---|
 | `delivered` | The issue was created or found, and the readback matched. |
-| `pending` | A request or the readback was uncertain. Retry with the same identity. |
-| `refused` | GitHub refused the creation, for example because the token lacks permission. |
+| `pending` | No delivery is confirmed. Retry reads a known issue or searches for its marker; uncertain creation and incomplete scans require destination review. |
 | `conflict` | This identity was already submitted with different content. |
 
 ## Consent

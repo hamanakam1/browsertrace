@@ -118,16 +118,9 @@ def _request(path: str, payload: Optional[dict] = None, *, before_send=None) -> 
         response = opener.open(request, timeout=REQUEST_TIMEOUT)
     except urllib.error.HTTPError as exc:
         status = exc.code
-        detail = ""
-        try:
-            body = exc.read(4096).decode("utf-8", "replace")
-            parsed = json.loads(body)
-            if isinstance(parsed, dict) and isinstance(parsed.get("message"), str):
-                detail = f": {parsed['message'][:120]}"
-        except (OSError, ValueError, UnicodeError):
-            detail = ""
         exc.close()
-        raise ValueError(f"GitHub returned HTTP {status}{detail}") from None
+        # Remote error bodies may echo credentials or private request content.
+        raise ValueError(f"GitHub returned HTTP {status}") from None
     with response:
         raw = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw) > MAX_RESPONSE_BYTES:
@@ -166,7 +159,8 @@ def _result(receipt: dict, previously_verified: bool = False) -> dict:
               "verified_at": receipt.get("verified_at"), "receipt": receipt}
     if receipt.get("item"):
         number = receipt["item"]
-        result.update(ticket_key=f"#{number}", ticket_url=f"https://github.com/{_repo()}/issues/{number}",
+        repo = urllib.parse.urlsplit(receipt["target"]).path.removeprefix("/repos/")
+        result.update(ticket_key=f"#{number}", ticket_url=f"https://github.com/{repo}/issues/{number}",
                       created=receipt.get("created"))
     if receipt.get("error"):
         result["error"] = receipt["error"]
@@ -175,7 +169,7 @@ def _result(receipt: dict, previously_verified: bool = False) -> dict:
 
 def _error(exc: Exception) -> str:
     if isinstance(exc, ValueError):
-        return f"{str(exc)[:200]}. No issue was created."
+        return f"{str(exc)[:200]}. No delivery is confirmed."
     return "GitHub could not be reached or timed out; any retry uses the same capture identity."
 
 
@@ -207,6 +201,7 @@ def _detail(record: dict, draft: dict, seed: str) -> str:
 
 def preview_ticket(recording: dict, ticket: dict) -> Dict[str, Any]:
     """Build the exact issue payload. This function never contacts GitHub."""
+    destination = target()
     record, draft = integrations._recording(recording), integrations._draft(ticket)
     seed = f"panther:capture:{record['id']}:{draft['id']}"
     identity = _search_marker(record["id"], draft["id"])
@@ -220,44 +215,59 @@ def preview_ticket(recording: dict, ticket: dict) -> Dict[str, Any]:
         "labels": [_LABEL, "needs-triage", "no-auto"],
     }
     fingerprint = hashlib.sha256(json.dumps(
-        {"target_url": target(), "payload": payload, "recording": record, "draft": draft},
+        {"target_url": destination, "payload": payload, "recording": record, "draft": draft},
         sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
     with storage.DATA_LOCK:
-        receipt = integrations._load_receipt(target(), seed)
+        receipt = integrations._load_receipt(destination, seed)
     warnings = ["Created issues are review-fenced: the body states that execution is not authorized.",
                 "The no-auto label is a convenience; the review fence is the text in the body.",
                 "A bounded summary is sent; the full neutral export remains available in Panther."]
-    return {"ok": True, "target": KIND, "target_url": target(), "payload": payload,
+    return {"ok": True, "target": KIND, "target_url": destination, "payload": payload,
             "seed_key": seed, "payload_hash": fingerprint, "warnings": warnings, "receipt": receipt}
 
 
-def _find_existing(seed: str) -> Optional[dict]:
+def _find_existing(seed: str, repo: str) -> Optional[dict]:
     """Find an issue that already carries this identity, if one exists."""
-    repo = _repo()
     issues = _request(f"/repos/{repo}/issues?state=all&per_page={MAX_ISSUES_SCANNED}&sort=created&direction=desc")
     if not isinstance(issues, list):
         raise ValueError("GitHub returned an unexpected issue list")
     for issue in issues:
         if not isinstance(issue, dict) or "pull_request" in issue:
             continue
-        if seed in (issue.get("body") or ""):
+        if isinstance(issue.get("body"), str) and f"Identity: {seed}" in issue["body"].splitlines():
             return issue
+    if len(issues) >= MAX_ISSUES_SCANNED:
+        raise ValueError("The recent issue scan is incomplete; review the destination before creating an issue")
     return None
 
 
-def _verify(seed: str, issue: dict, payload: dict) -> None:
+def _verify(seed: str, issue: dict, payload: dict, expected_item: int) -> None:
     """Confirm the returned issue is exactly the one that was asked for."""
     if (type(issue.get("number")) is not int or issue["number"] <= 0
+            or issue["number"] != expected_item or "pull_request" in issue
             or issue.get("title") != payload["title"]
-            or seed not in (issue.get("body") or "")
+            or issue.get("body") != payload["body"]
+            or f"Identity: {seed}" not in payload["body"].splitlines()
             or issue.get("state") not in ("open", "closed")):
         raise ValueError("GitHub did not confirm the exact issue identity; delivery remains pending.")
 
 
-def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> Dict[str, Any]:
+def submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
     """Create one confirmed issue and verify it, reusing a durable receipt."""
+    # Automation already holds this reentrant lock when submitting. Reuse its
+    # lock order rather than adding an adapter lock that can deadlock with it.
+    with storage.DATA_LOCK:
+        return _submit_ticket(recording, ticket, before_send=before_send,
+                              expected_payload_hash=expected_payload_hash)
+
+
+def _submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
     preview = preview_ticket(recording, ticket)
+    if expected_payload_hash is not None and preview["payload_hash"] != expected_payload_hash:
+        return {"ok": False, "state": "conflict", "verified": False,
+                "error": "The confirmed destination or payload changed; preview it again before sending"}
     destination, payload, seed = preview["target_url"], preview["payload"], preview["seed_key"]
+    repo = urllib.parse.urlsplit(destination).path.removeprefix("/repos/")
     identity = _search_marker(recording["id"], ticket["id"])
     with storage.DATA_LOCK:
         prior = integrations._load_receipt(destination, seed)
@@ -269,25 +279,41 @@ def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> Dict[st
             return _result(prior, previously_verified=True)
         receipt = dict(prior or {}, target=destination, seed_key=seed, payload_hash=preview["payload_hash"],
                        state="pending", verified=False, updated_at=time.time())
+        # Older pending receipts without a marker cannot establish whether a
+        # POST was sent. Treat that uncertainty as an attempted creation.
+        receipt.setdefault("creation_attempted", prior is not None)
         receipt.pop("error", None)
         path = integrations._receipt_path(destination, seed)
         storage.write_json(path, receipt)  # a write failure must prevent the request
     try:
-        existing = _find_existing(identity)
-        if existing:
-            receipt.update(item=existing.get("number"), created=False, updated_at=time.time())
+        if not receipt.get("item"):
+            existing = _find_existing(identity, repo)
+            if existing:
+                number = existing.get("number")
+                if type(number) is not int or number <= 0:
+                    raise ValueError("GitHub did not return a valid issue number")
+                receipt.update(item=number, created=False, updated_at=time.time())
+            else:
+                if receipt["creation_attempted"]:
+                    raise ValueError("A previous creation is uncertain and its issue was not found; review the destination before retrying")
+
+                def guard_creation():
+                    if before_send is not None:
+                        before_send()
+                    if target() != destination:
+                        raise ValueError("The configured GitHub destination changed; preview it again before sending")
+                    receipt.update(creation_attempted=True, updated_at=time.time())
+                    storage.write_json(path, receipt)
+
+                response = _request(f"/repos/{repo}/issues", payload, before_send=guard_creation)
+                if not isinstance(response, dict) or type(response.get("number")) is not int or response["number"] <= 0:
+                    raise ValueError("GitHub did not return a valid issue number")
+                receipt.update(item=response["number"], created=True, updated_at=time.time())
             storage.write_json(path, receipt)
-        else:
-            response = _request(f"/repos/{_repo()}/issues", payload, before_send=before_send)
-            if not isinstance(response, dict) or type(response.get("number")) is not int or response["number"] <= 0:
-                raise ValueError("GitHub did not return a valid issue number")
-            receipt.update(item=response["number"], created=True, updated_at=time.time())
-            storage.write_json(path, receipt)
-            existing = response
-        readback = _request(f"/repos/{_repo()}/issues/{receipt['item']}")
+        readback = _request(f"/repos/{repo}/issues/{receipt['item']}")
         if not isinstance(readback, dict):
             raise ValueError("GitHub did not return the created issue")
-        _verify(identity, readback, payload)
+        _verify(identity, readback, payload, receipt["item"])
         receipt.update(state="delivered", verified=True, verified_at=time.time(), updated_at=time.time())
     except (OSError, ValueError, urllib.error.URLError) as exc:
         receipt.update(state="pending", verified=False, error=_error(exc), updated_at=time.time())

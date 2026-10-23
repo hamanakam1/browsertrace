@@ -109,6 +109,7 @@ class HttpTests(unittest.TestCase):
                 **body, "confirmed": True, "payload_hash": preview["payload_hash"]})
             self.assertEqual(code, 200, delivered)
             submit.assert_called_once()
+            self.assertEqual(submit.call_args.kwargs["expected_payload_hash"], preview["payload_hash"])
 
     def test_page_reported_failures_are_readable_and_never_verified(self):
         capture = {**self.capture, "events": [

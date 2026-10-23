@@ -421,7 +421,7 @@ def _verify(target: str, item: int, payload: dict) -> None:
         raise ValueError("Dashboard ticket content or review fences differ; it was not updated. Review the existing ticket.")
 
 
-def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> dict:
+def submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> dict:
     """Submit ONE explicitly admitted draft, preserving uncertain delivery state.
 
     The HTTP route owns manual confirmation; the automation worker owns its
@@ -431,6 +431,9 @@ def submit_ticket(recording: dict, ticket: dict, *, before_send=None) -> dict:
     the original identity. Retrying an unknown result reuses that same seed.
     """
     preview = preview_ticket(recording, ticket)
+    if expected_payload_hash is not None and preview["payload_hash"] != expected_payload_hash:
+        return {"ok": False, "state": "conflict", "verified": False,
+                "error": "The confirmed destination or payload changed; preview it again before sending"}
     target, payload = preview["target_url"], preview["payload"]
     with storage.DATA_LOCK:
         prior = _load_receipt(target, preview["seed_key"])

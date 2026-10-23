@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A draft's evidence sentence now states the scope it was drawn from. A truncated session used to report "300 recorded events" when more had been recorded; the fact was only in the machine-readable provenance.
 
 ### Security
-- Nothing yet
+- Replay exports quote captured links as complete Python literals and keep capture identifiers inside the header comment, preventing page-controlled text from introducing statements into a generated script.
+- GitHub delivery serializes creation, retries known issue numbers directly, and records creation attempts before sending. Uncertain attempts and incomplete marker scans block further creation instead of risking duplicates.
+- Manual delivery carries the confirmed payload hash into the destination adapter. GitHub requests and receipt links retain the reviewed repository, readback checks the full review-fenced body, and HTTP error bodies cannot echo credentials into receipts.
 
 ## [1.7.0] - 2026-10-22
 

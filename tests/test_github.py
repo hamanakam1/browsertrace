@@ -1,4 +1,5 @@
 """The GitHub destination: an explicit, narrow, verified remote delivery."""
+import concurrent.futures
 import json
 import os
 import sys
@@ -39,7 +40,7 @@ class FakeGitHub(BaseHTTPRequestHandler):
                 return self.reply(404, {"message": "Not Found"})
             return self.reply(200, {"full_name": REPO, "private": False})
         if self.path.startswith(f"/repos/{REPO}/issues?"):
-            return self.reply(200, list(state["issues"].values()))
+            return self.reply(200, state.get("listed_issues", list(state["issues"].values())))
         if self.path.startswith(f"/repos/{REPO}/issues/"):
             number = int(self.path.rsplit("/", 1)[-1])
             issue = state["issues"].get(number)
@@ -176,6 +177,149 @@ class GitHubDestinationTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "pending")
         self.assertFalse(result["verified"])
+
+    def test_retry_reads_the_receipted_issue_even_when_it_is_not_in_recent_issues(self):
+        self.server.state["readback_unavailable"] = True
+        first = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(first["ok"])
+        self.server.state["readback_unavailable"] = False
+        self.server.state["listed_issues"] = []
+        self.server.state["gets"].clear()
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["ticket_key"], "#7")
+        self.assertEqual(len(self.server.state["posts"]), 1)
+        self.assertEqual(self.server.state["gets"], [f"/repos/{REPO}/issues/7"])
+
+    def test_concurrent_submissions_share_one_creation(self):
+        first_lookup = threading.Event()
+        second_lookup = threading.Event()
+        release_first = threading.Event()
+        original = github._find_existing
+
+        def delayed_lookup(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if first_lookup.is_set():
+                second_lookup.set()
+            else:
+                first_lookup.set()
+                if not release_first.wait(5):
+                    raise AssertionError("First lookup was not released")
+            return result
+
+        with patch.object(github, "_find_existing", side_effect=delayed_lookup):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(github.submit_ticket, self.recording, self.ticket)
+                try:
+                    self.assertTrue(first_lookup.wait(5))
+                    second = pool.submit(github.submit_ticket, self.recording, self.ticket)
+                    raced = second_lookup.wait(0.2)
+                finally:
+                    release_first.set()
+                results = [first.result(timeout=5), second.result(timeout=5)]
+        self.assertFalse(raced, "A second submission entered creation while the first was pending")
+        self.assertTrue(all(result["ok"] for result in results), results)
+        self.assertEqual(len(self.server.state["posts"]), 1)
+
+    def test_a_lost_creation_response_is_never_blindly_posted_again(self):
+        original = github._request
+
+        def lost_response(path, payload=None, **kwargs):
+            if payload is not None:
+                kwargs["before_send"]()
+                raise TimeoutError("Synthetic lost response")
+            return original(path, payload, **kwargs)
+
+        with patch.object(github, "_request", side_effect=lost_response):
+            first = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(first["ok"])
+        retry = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(retry["ok"], retry)
+        self.assertEqual(retry["state"], "pending")
+        self.assertEqual(self.server.state["posts"], [])
+
+    def test_a_lost_response_can_recover_an_exact_issue_from_the_marker(self):
+        original = github._request
+
+        def lost_response(path, payload=None, **kwargs):
+            response = original(path, payload, **kwargs)
+            if payload is not None:
+                raise TimeoutError("Synthetic lost response")
+            return response
+
+        with patch.object(github, "_request", side_effect=lost_response):
+            first = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(first["ok"])
+        retry = github.submit_ticket(self.recording, self.ticket)
+        self.assertTrue(retry["ok"], retry)
+        self.assertEqual(len(self.server.state["posts"]), 1)
+
+    def test_a_full_recent_issue_page_does_not_prove_the_identity_is_absent(self):
+        self.server.state["listed_issues"] = [
+            {"number": number, "body": "Unrelated issue", "state": "open"}
+            for number in range(1, github.MAX_ISSUES_SCANNED + 1)
+        ]
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(self.server.state["posts"], [])
+
+    def test_readback_must_match_the_complete_review_fenced_body(self):
+        preview = github.preview_ticket(self.recording, self.ticket)
+        body = preview["payload"]["body"].replace(github.FENCE, "Fence removed")
+        self.server.state["issues"][42] = {
+            "number": 42, "title": self.ticket["title"], "body": body, "state": "open",
+        }
+        result = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(result["ok"], result)
+        self.assertFalse(result["verified"])
+        self.assertNotIn("No issue was created", result["error"])
+        self.assertEqual(self.server.state["posts"], [])
+
+    def test_result_links_use_the_receipted_destination(self):
+        first = github.submit_ticket(self.recording, self.ticket)
+        with patch.dict(os.environ, {"PANTHER_GITHUB_REPO": "example/another"}):
+            result = github._result(first["receipt"])
+        self.assertEqual(result["ticket_url"], f"https://github.com/{REPO}/issues/7")
+
+    def test_configuration_change_during_lookup_prevents_creation(self):
+        original = github._find_existing
+
+        def changed_destination(*args, **kwargs):
+            result = original(*args, **kwargs)
+            os.environ["PANTHER_GITHUB_REPO"] = "example/another"
+            return result
+
+        with patch.object(github, "_find_existing", side_effect=changed_destination):
+            result = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(result["ok"], result)
+        self.assertIn("destination changed", result["error"])
+        self.assertEqual(self.server.state["posts"], [])
+
+    def test_configuration_change_after_manual_confirmation_prevents_creation(self):
+        preview = github.preview_ticket(self.recording, self.ticket)
+        with patch.dict(os.environ, {"PANTHER_GITHUB_REPO": "example/another"}):
+            result = destinations.submit("github", self.recording, self.ticket,
+                                         expected_payload_hash=preview["payload_hash"])
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["state"], "conflict")
+        self.assertEqual(self.server.state["gets"], [])
+        self.assertEqual(self.server.state["posts"], [])
+
+    def test_remote_error_details_cannot_echo_a_credential_into_receipts(self):
+        self.server.state["create_fails"] = True
+        original = FakeGitHub.reply
+
+        def reflected_error(handler, code, payload):
+            if code == 422:
+                payload = {"message": f"Credential {TOKEN} was rejected"}
+            return original(handler, code, payload)
+
+        with patch.object(FakeGitHub, "reply", reflected_error):
+            result = github.submit_ticket(self.recording, self.ticket)
+        self.assertFalse(result["ok"])
+        self.assertNotIn(TOKEN, json.dumps(result))
+        for receipt in (storage.ROOT / "deliveries").glob("*.json"):
+            self.assertNotIn(TOKEN, receipt.read_text())
 
     def test_a_refused_creation_does_not_claim_delivery(self):
         self.server.state["create_fails"] = True

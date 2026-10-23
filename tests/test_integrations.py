@@ -74,6 +74,14 @@ class FakeDashboard(BaseHTTPRequestHandler):
 
 
 class IntegrationsTests(unittest.TestCase):
+    def test_changed_manual_confirmation_refuses_delivery_before_contacting_destination(self):
+        with patch.object(integrations, "preview_ticket", return_value={"payload_hash": "changed"}), \
+                patch.object(integrations, "_request") as request:
+            result = integrations.submit_ticket({}, {}, expected_payload_hash="confirmed")
+        self.assertEqual(result["state"], "conflict")
+        self.assertFalse(result["verified"])
+        request.assert_not_called()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeDashboard)

@@ -429,7 +429,8 @@ def handle_request(handler: BaseHTTPRequestHandler):
             elif data.get("confirmed") is not True or data.get("payload_hash") != preview["payload_hash"]:
                 _json(handler, 409, {"error": "Preview and explicitly confirm this exact ticket before sending"})
             else:
-                result = destinations.submit(parts[1], entry, ticket)
+                result = destinations.submit(parts[1], entry, ticket,
+                                             expected_payload_hash=data["payload_hash"])
                 _json(handler, 200 if result.get("ok") else 409, result)
             return
         if parts[0] == "recordings":
