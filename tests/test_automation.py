@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import automation
+import destinations
+import github
 import integrations
 import storage
 import tickets
@@ -405,6 +407,57 @@ class AutomationTests(unittest.TestCase):
         self.assertIsNone(storage.get_recording(rid))
         self.assertFalse(automation._path(rid).exists())
         self.assertFalse((storage.TICKETS_DIR / f"{rid}.json").exists())
+        self.assertEqual(self.dashboard.state["posts"], [])
+
+    def github_receipt_job(self):
+        target = "https://api.github.com/repos/example/widgets"
+        with patch.dict(os.environ, {"PANTHER_GITHUB_REPO": "example/widgets"}):
+            rid = self.record(automation={**self.policy, "target_kind": "github", "target_url": target})
+            entry = storage.get_recording(rid)
+            draft = self.generated(rid, 1)["tickets"][0]
+            snapshot = automation._snapshot(entry)
+            preview = destinations.preview("github", snapshot, draft)
+        job = automation._load(rid)
+        job.update(status="delivering", attempts=1, ticket_count=1,
+                   frozen={"recording": snapshot, "items": [{"ticket": draft,
+                           "payload_hash": preview["payload_hash"], "seed_key": preview["seed_key"]}]})
+        automation._save(job)
+        receipt = {"target": target, "seed_key": preview["seed_key"], "payload_hash": preview["payload_hash"],
+                   "state": "delivered", "verified": True, "item": 7, "created": True, "verified_at": 1700000000}
+        storage.write_json(integrations._receipt_path(target, preview["seed_key"]), receipt)
+        return rid
+
+    def test_github_status_and_restart_recover_the_destination_issue_identity(self):
+        rid = self.github_receipt_job()
+        with patch.object(github, "_request", side_effect=AssertionError("Receipt recovery must not contact GitHub")):
+            automation.recover_jobs(resume_inflight=True)
+            for _ in range(2):
+                code, state = self.request(f"automation/{rid}")
+                self.assertEqual(code, 200, state)
+                self.assertEqual(state["status"], "delivered")
+                self.assertEqual(state["target_kind"], "github")
+                delivery = state["deliveries"][0]
+                self.assertEqual(delivery["ticket_key"], "#7")
+                self.assertEqual(delivery["ticket_url"], "https://github.com/example/widgets/issues/7")
+                self.assertEqual(delivery["verified_at"], 1700000000)
+                self.assertTrue(delivery["previously_verified"])
+        self.assertEqual(self.dashboard.state["posts"], [])
+
+    def test_deleted_github_capture_keeps_destination_kind_and_issue_identity(self):
+        rid = self.github_receipt_job()
+        with patch.object(github, "_request", side_effect=AssertionError("Cancellation must not contact GitHub")):
+            code, result = self.request(f"recordings/{rid}", method="DELETE")
+            self.assertEqual(code, 200, result)
+            self.assertTrue(result["deleted"])
+            code, state = self.request(f"automation/{rid}")
+        self.assertEqual(code, 200, state)
+        self.assertEqual(state["status"], "cancelled")
+        self.assertFalse(state["upload_cancelled"])
+        self.assertEqual(state.get("target_kind"), "github")
+        self.assertEqual(state["target_url"], "https://api.github.com/repos/example/widgets")
+        self.assertEqual(state["deliveries"][0]["ticket_key"], "#7")
+        self.assertEqual(state["deliveries"][0]["ticket_url"], "https://github.com/example/widgets/issues/7")
+        self.assertEqual(state["delivered_count"], 1)
         self.assertEqual(self.dashboard.state["posts"], [])
 
     def test_restart_recovers_same_frozen_snapshot_and_verified_receipt(self):

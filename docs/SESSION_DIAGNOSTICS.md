@@ -44,16 +44,24 @@ page's world, and an isolated world never sees them.
 
 Panther therefore installs a small relay in the page's world for the duration
 of the capture. The relay listens for the two page-side failure events and
-forwards a bounded message and location to the content script through a
+forwards a message and location to the content script through a
 `CustomEvent`. The relay holds no extension privilege, reads no page text and
 no input values, and cannot create a ticket or run anything.
+The content script omits oversized messages; the background sanitizes accepted
+text before clipping it for storage. Page errors can themselves contain private
+values, so these heuristic filters are not a guarantee of complete redaction.
 
 The `http_error` and `resource_error` channels need no relay at all: the
 content script observes the browser's own resource timing and element load
 errors directly.
 
-The relay is installed once per page load, and a per-session nonce separates
-Panther's relay from any other listener on the page.
+The relay keeps one listener pair per page, scoped to a session nonce and start
+time. Stop, Off, failed capture setup, or replacement by a newer session removes
+the listeners. A retained session marker refuses delayed starts after Stop and
+ignores stale stops aimed at an earlier capture. Teardown is best effort when a
+page closes or browser permissions change; background session checks remain
+authoritative, and cleanup cannot hold Off indefinitely. Anonymous listeners
+from an older loaded extension version disappear when the page reloads.
 
 ## What is deliberately not captured
 
@@ -70,8 +78,9 @@ Panther's relay from any other listener on the page.
   failures are left out. Failures that happen during the capture are kept,
   and each one carries the time it actually happened, so the recorded
   timeline stays truthful.
-- **Page text, typed values and keystrokes.** These were never captured, and
-  a failure does not become a way around that.
+- **Direct input or page-text collection.** Diagnostics do not read input
+  values, keystrokes, or page text. A page can include those values in its own
+  error message; the same bounded redaction path applies to that message.
 
 ## Where a diagnostic shows up
 
@@ -97,11 +106,16 @@ record a failure it did not have can dispatch a failure event on the page's
 document, and the relay's own event name is observable by page scripts. This
 is the same property every error tracker and session replay tool has, and it
 is why Panther treats a failure as an observation rather than a fact.
+The nonce fences sessions; it is not a secret or an authenticity credential.
+A page can also suppress its own diagnostics, including by dispatching the
+relay's teardown event. That event grants no capture or delivery authority.
 
 What a page cannot do is change the *time* of an HTTP failure, because that
 comes from the browser's own resource timing. And what a page cannot do at
-all is turn a failure into a ticket, an execution, or a verified defect: a
-failure only ever reaches a draft, and a draft always requires review.
+all is authorize capture, delivery, execution, or a verified defect. Diagnostic
+observations can inform a draft; delivery requires either explicit manual
+confirmation or the user's previously consented, bounded automatic-delivery
+policy. GitHub review labels and issue text are instructions, not access controls.
 
 ## Verification
 

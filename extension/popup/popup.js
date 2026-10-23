@@ -18,6 +18,8 @@ let connectionVersion = 0;
 let connectionActive = false;
 let openingMonitor = false;
 let monitorError = "";
+let destinationViewKey = "";
+let captureStartPending = false;
 
 const runtimeState = () => pendingPower || current.power?.state || "off";
 const isOn = () => runtimeState() === "on";
@@ -53,6 +55,8 @@ function syncConnections() {
     if (connectionActive) ++connectionVersion;
     connectionActive = false;
     automationTarget = ""; targetError = "";
+    destinationList = [];
+    elements.automation.checked = false; elements.automationAI.checked = false;
     elements.backendBanner.hidden = true;
     return;
   }
@@ -80,24 +84,38 @@ function syncConnections() {
  * canonical target are frozen for the session once consent is given.
  */
 function renderDestinations(list) {
-  const previous = elements.automationDestination.value;
+  const previous = automationKind;
   destinationList = list;
-  elements.automationDestination.replaceChildren(...list.map((destination) => {
-    const option = document.createElement("option");
-    option.value = destination.kind;
-    option.textContent = destination.available ? `${destination.label} — ${destination.url}`
-      : destination.configured ? `${destination.label} — ${destination.url} (not reachable right now)`
-        : `${destination.label} — not configured`;
-    option.disabled = !destination.configured;
-    return option;
-  }));
-  const usable = list.filter((destination) => destination.configured);
+  const usable = list.filter((destination) => destination.configured && destination.url);
   const chosen = usable.find((destination) => destination.kind === previous) || usable[0];
-  elements.automationDestination.value = chosen ? chosen.kind : "";
-  elements.automationDestination.hidden = list.length < 2;
+  if (automationKind !== (chosen?.kind || "") || automationTarget !== (chosen?.url || "")) {
+    elements.automation.checked = false; elements.automationAI.checked = false;
+  }
   automationTarget = chosen ? chosen.url : "";
   automationKind = chosen ? chosen.kind : "";
   targetError = chosen ? "" : "No delivery destination is configured. Manual capture and JSON export still work.";
+}
+
+function renderDestinationControl(pinned, locked) {
+  const list = pinned ? [{kind: pinned.target_kind, url: pinned.target_url,
+    label: pinned.target_kind === "github" ? "GitHub issues" : "Local ticket service", configured: true, fixed: true}] : destinationList;
+  const key = JSON.stringify(list);
+  if (key !== destinationViewKey) {
+    destinationViewKey = key;
+    elements.automationDestination.replaceChildren(...list.map(destination => {
+      const option = document.createElement("option");
+      option.value = destination.kind;
+      option.textContent = destination.fixed ? `${destination.label} — ${destination.url} (fixed for this session)`
+        : destination.available ? `${destination.label} — ${destination.url}`
+          : destination.configured ? `${destination.label} — ${destination.url} (not reachable right now)`
+            : `${destination.label} — not configured`;
+      option.disabled = !destination.configured || !destination.url;
+      return option;
+    }));
+  }
+  elements.automationDestination.value = pinned?.target_kind || automationKind;
+  elements.automationDestination.hidden = !pinned && list.length < 2;
+  elements.automationDestination.disabled = locked || !list.some(item => item.configured && item.url);
 }
 
 function showError(message = "") {
@@ -113,7 +131,7 @@ function render(state) {
   const on = isOn();
   const recording = state.status === "recording";
   const pending = state.status === "pending";
-  const working = ["saving", "generating"].includes(state.status);
+  const working = captureStartPending || ["saving", "generating"].includes(state.status);
   const job = state.result?.automation;
   const automatic = !!state.result?.automationPolicy;
   const terminal = ["delivered", "blocked", "cancelled"].includes(job?.status);
@@ -138,9 +156,15 @@ function render(state) {
   }
   elements.automation.disabled = !on || !!state.session || busy || working || deliveryActive || !automationTarget;
   elements.automationAI.disabled = !on || !elements.automation.checked || !!state.session || busy || working || deliveryActive;
-  const displayedTarget = state.session?.automation?.target_url || (deliveryActive ? state.result.automationPolicy.target_url : automationTarget);
-  const displayedKind = state.session?.automation?.target_kind || (deliveryActive ? state.result.automationPolicy.target_kind : automationKind);
-  elements.automationTarget.textContent = displayedTarget ? `Destination: ${displayedTarget}${displayedKind ? ` (${displayedKind})` : ""}${state.session || deliveryActive ? " · fixed for this session" : ""}${on ? "" : " · historical; Panther is not on"}` : !on ? "Turn Panther on to check the destination. No backend request is made while off." : targetError || "Automatic delivery unavailable: destination is unknown. Manual capture still works.";
+  const policy = state.session?.automation || (deliveryActive ? state.result.automationPolicy : null);
+  const pinned = policy ? {...policy, target_kind: policy.target_kind || "ticket-service"} : null;
+  renderDestinationControl(pinned, !on || !!state.session || busy || working || deliveryActive);
+  const displayedTarget = pinned?.target_url || automationTarget;
+  const displayedKind = pinned?.target_kind || automationKind;
+  const destinationNotice = displayedKind === "github"
+    ? " · Delivery sends summaries remotely to GitHub. Review labels and body text are instructions, not access controls." : "";
+  elements.automationTarget.textContent = state.session && !pinned ? "Manual capture — automatic delivery was not enabled for this session."
+    : displayedTarget ? `Destination: ${displayedTarget}${displayedKind ? ` (${displayedKind})` : ""}${pinned ? " · fixed for this session" : ""}${on ? "" : " · historical; Panther is not on"}${destinationNotice}` : !on ? "Turn Panther on to check the destination. No backend request is made while off." : targetError || "Automatic delivery unavailable: destination is unknown. Manual capture still works.";
   elements.recordBtn.hidden = !!state.session || working || deliveryActive;
   elements.recordBtn.disabled = !on || !state.enabled || busy || working || deliveryActive || (elements.automation.checked && !automationTarget);
   elements.stopBtn.hidden = !recording;
@@ -163,9 +187,12 @@ function render(state) {
   elements.cancelAutomationBtn.textContent = state.session?.cancelRequested || state.result?.cancelRequested ? "Check cancellation" : "Cancel automatic delivery";
   elements.reviewBtn.hidden = !state.result?.id;
   elements.reviewBtn.disabled = !on || busy;
+  const deliveryFence = state.result?.automationPolicy?.target_kind === "github"
+    ? "GitHub review labels and body text are instructions, not access controls. Panther does not execute work."
+    : "Local backlog proposals require review. Panther does not execute work.";
   elements.meta.textContent = state.session ?
     `${state.session.eventCount} events · ${state.session.screenshotCount} screenshots · started ${new Date(state.session.startTime).toLocaleTimeString()}` :
-    automatic ? `${state.result.eventCount} events saved · ${job?.delivered_count || 0}/${job?.ticket_count || 0} verified delivery receipts · ${job?.stage || "status unknown"} · ${state.result.automationPolicy.target_url}. Receipts are historical, not current ticket state. Review-only backlog; no work execution.${state.result.automationCheckedAt ? ` Last status check ${new Date(state.result.automationCheckedAt).toLocaleTimeString()}.` : ""}` :
+    automatic ? `${state.result.eventCount} events saved · ${job?.delivered_count || 0}/${job?.ticket_count || 0} verified delivery receipts · ${job?.stage || "status unknown"} · ${state.result.automationPolicy.target_url}. Receipts are historical, not current ticket state. ${deliveryFence}${state.result.automationCheckedAt ? ` Last status check ${new Date(state.result.automationCheckedAt).toLocaleTimeString()}.` : ""}` :
     state.result ? `${state.result.eventCount} events saved · ${state.result.ticketCount || 0} draft tickets. Review before sending to another system.` :
       "The page panel shows capture status and basic controls.";
   showError(state.session?.error || state.result?.error || job?.error || operationError);
@@ -226,7 +253,7 @@ async function changePower(on) {
   if ((!on && runtimeState() === "stopping") || (on && !["off", "error"].includes(runtimeState()))) return;
   const epoch = ++powerEpoch;
   ++statusRequest; ++operationRequest;
-  busy = false; pendingConsent = null; operationError = "";
+  busy = false; captureStartPending = false; pendingConsent = null; operationError = "";
   pendingPower = on ? "starting" : "stopping";
   current = {...current, enabled: false, power: {...current.power, error: ""}};
   elements.screenshots.checked = false; elements.automation.checked = false; elements.automationAI.checked = false;
@@ -265,21 +292,32 @@ elements.automation.addEventListener("change", () => {
   render(current);
 });
 elements.automationDestination.addEventListener("change", () => {
-  const chosen = destinationList.find((destination) => destination.kind === elements.automationDestination.value);
-  automationKind = chosen?.kind || "";
-  automationTarget = chosen?.configured ? chosen.url : "";
+  if (elements.automationDestination.disabled) { render(current); return; }
+  const chosen = destinationList.find((destination) => destination.kind === elements.automationDestination.value && destination.configured && destination.url);
+  if (!chosen) { render(current); return; }
+  if (chosen.kind !== automationKind || chosen.url !== automationTarget) {
+    elements.automation.checked = false; elements.automationAI.checked = false;
+  }
+  automationKind = chosen.kind;
+  automationTarget = chosen.url;
   render(current);
 });
 elements.recordBtn.addEventListener("click", async () => {
-  const epoch = powerEpoch;
-  if (!isOn()) return;
+  const epoch = powerEpoch, connection = connectionVersion;
+  if (!isOn() || captureStartPending || elements.recordBtn.disabled || elements.recordBtn.hidden) return;
+  const automation = elements.automation.checked ? { enabled: true, consent: true, target_kind: automationKind, target_url: automationTarget, use_ai: elements.automationAI.checked, max_tickets: 5 } : undefined;
+  const fields = {consent: elements.consent.checked, screenshots: elements.screenshots.checked, goal: elements.goal.value, automation};
+  captureStartPending = true;
+  render(current);
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (epoch !== powerEpoch || !isOn()) return;
+    if (epoch !== powerEpoch || connection !== connectionVersion || !isOn()) return;
     if (!tab?.id) throw new Error("Choose a webpage to capture.");
-    const automation = elements.automation.checked ? { enabled: true, consent: true, target_kind: automationKind, target_url: automationTarget, use_ai: elements.automationAI.checked, max_tickets: 5 } : undefined;
-    await command("extension.startRecording", { tabId: tab.id, consent: elements.consent.checked, screenshots: elements.screenshots.checked, goal: elements.goal.value, automation });
-  } catch (error) { showError(error.message); }
+    await command("extension.startRecording", { tabId: tab.id, ...fields });
+  } catch (error) { if (epoch === powerEpoch && connection === connectionVersion) operationError = error.message; }
+  finally {
+    if (epoch === powerEpoch) { captureStartPending = false; render(current); }
+  }
 });
 elements.stopBtn.addEventListener("click", () => command("extension.stopRecording"));
 elements.retryBtn.addEventListener("click", () => command("extension.retryUpload"));

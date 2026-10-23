@@ -197,11 +197,47 @@ test("popup tabId works without sender.tab and only the top frame is injected", 
   assert.deepEqual(f.contentInjections()[0], { target: { tabId: 7, frameIds: [0] }, files: ["content/content.js"] });
   assert.equal(f.mainWorldInjections().length, 1);
   assert.deepEqual(f.mainWorldInjections()[0].target, { tabId: 7, frameIds: [0] });
-  assert.deepEqual(f.mainWorldInjections()[0].args, [f.data[SESSION_KEY].diagnosticNonce]);
+  assert.deepEqual(f.mainWorldInjections()[0].args, [f.data[SESSION_KEY].diagnosticNonce, "start", f.data[SESSION_KEY].startTime]);
   assert.equal(f.data[SESSION_KEY].url, "https://app.test/dashboard#work-board");
   assert.equal(f.data[SESSION_KEY].goal, "Make filtering clearer");
   assert.equal(f.data[SESSION_KEY].screenshotConsent, false);
   assert.ok(f.calls.badges.some((value) => value.text === "REC"));
+});
+
+test("Stop and Off explicitly remove the matching main-world relay even when content messaging fails", async () => {
+  for (const action of ["stop", "off"]) {
+    const f = fixture(); await f.start();
+    const session = structuredClone(f.data[SESSION_KEY]);
+    f.api.tabs.sendMessage = async () => { throw new Error("Content unavailable"); };
+    if (action === "stop") await f.send("extension.stopRecording");
+    else await f.turnOff();
+    const teardown = f.mainWorldInjections().filter((call) => call.args[1] === "stop");
+    assert.equal(teardown.length, 1);
+    assert.deepEqual(teardown[0].args, [session.diagnosticNonce, "stop", session.startTime]);
+  }
+});
+
+test("Off completes with capture refused when page cleanup APIs never settle", { timeout: 2000 }, async () => {
+  const f = fixture(); await f.start();
+  f.api.tabs.sendMessage = () => new Promise(() => {});
+  f.api.scripting.executeScript = () => new Promise(() => {});
+  const result = await f.turnOff();
+  assert.equal(result.session.powerPaused, true);
+  assert.equal(f.data[SETTINGS_KEY].enabled, false);
+  assert.equal((await f.event()).ignored, true);
+  assert.equal(f.calls.fetch.length, 0);
+});
+
+test("failed content injection cleans up the main-world relay installed before it", async () => {
+  const f = fixture();
+  const execute = f.api.scripting.executeScript;
+  f.api.scripting.executeScript = async (value) => {
+    await execute(value);
+    if (value.files) throw new Error("Synthetic injection failure");
+  };
+  await assert.rejects(f.start(), /Synthetic injection failure/);
+  assert.equal(f.data[SESSION_KEY], undefined);
+  assert.deepEqual(f.mainWorldInjections().map((value) => value.args[1]), ["start", "stop"]);
 });
 
 test("page failures join the capture timeline only for the active consented session", async () => {

@@ -26,6 +26,7 @@ _ADAPTERS = {
         "target": (integrations, "_target"),
         "preview": (integrations, "preview_ticket"),
         "submit": (integrations, "submit_ticket"),
+        "receipt_result": (integrations, "_result"),
     },
     GITHUB: {
         "label": "GitHub issues",
@@ -33,6 +34,7 @@ _ADAPTERS = {
         "target": (github, "target"),
         "preview": (github, "preview_ticket"),
         "submit": (github, "submit_ticket"),
+        "receipt_result": (github, "_result"),
     },
 }
 
@@ -71,6 +73,15 @@ def preview(kind: str, recording: dict, ticket: dict) -> Dict[str, Any]:
 def submit(kind: str, recording: dict, ticket: dict, *, before_send=None, expected_payload_hash=None) -> Dict[str, Any]:
     return _call(kind, "submit", recording, ticket, before_send=before_send,
                  expected_payload_hash=expected_payload_hash)
+
+
+def receipt_result(kind: str, receipt: dict, *, previously_verified=False) -> Dict[str, Any]:
+    """Render a durable receipt with its destination's identity and links.
+
+    Recovery is local only; it does not probe the destination or read current
+    configuration, which may differ from the target retained in the receipt.
+    """
+    return _call(kind, "receipt_result", receipt, previously_verified=previously_verified)
 
 
 def catalogue() -> List[Dict[str, Any]]:

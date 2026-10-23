@@ -4,11 +4,11 @@ Panther's scope ends at ticket creation and verified delivery. It does not imple
 
 ## Operator experience
 
-Explicitly turn Panther on from the popup first. Before starting a capture, separately enable automatic delivery to the exact local ticket service origin displayed in the popup. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
+Explicitly turn Panther on from the popup first. Before starting a capture, choose a configured destination and separately enable automatic delivery to its displayed target. The local ticket service stays loopback-only; the GitHub adapter sends issue content to the selected remote repository. Local AI is another optional choice; evidence-only generation needs no model. These choices are per session and default off. The normal Start action and chosen-tab capture consent remain necessary.
 
-After Stop, the extension saves the capture and the backend automatically generates proposals, submits them to Dashboard, and reads each ticket back. The popup, floating controls, and review page show progress and verified counts. **Cancel remaining delivery** prevents further work but cannot retract an in-flight request or delete an existing Dashboard ticket. **Retry now** advances an eligible automatic retry; it does not renew authority or reset the budget.
+After Stop, the extension saves the capture and the backend automatically generates proposals, submits them to the frozen destination, and reads each ticket or issue back. The popup, floating controls, and review page show progress and verified counts. **Cancel remaining delivery** prevents further work but cannot retract an in-flight request or delete an existing ticket or issue. **Retry now** advances an eligible automatic retry; it does not renew authority or reset the budget.
 
-Automatic output is an **unreviewed proposal**. Recorded actions are evidence of those actions, not proof of a defect. AI hypotheses remain separate from observed reproduction steps. Every created ticket enters backlog with `no-auto`, `needs-triage`, machine provenance, and the explicit denial of autonomous execution. A verified receipt proves that content and those fences matched at its timestamp; it is not continuous monitoring of the ticket's current state.
+Automatic output is an **unreviewed proposal**. Recorded actions are evidence of those actions, not proof of a defect. AI hypotheses remain separate from observed reproduction steps. Local-service tickets enter backlog with `no-auto`, `needs-triage`, machine provenance, and the explicit denial of autonomous execution. GitHub issues carry review labels and the execution-denial text in their body; those instructions are not GitHub permission controls. A verified receipt proves that content and the destination's required review markers matched at its timestamp; it is not continuous monitoring of the ticket's current state.
 
 ## Admission contract
 
@@ -19,6 +19,7 @@ Automatic output is an **unreviewed proposal**. Recorded actions are evidence of
   "automation": {
     "enabled": true,
     "consent": true,
+    "target_kind": "ticket-service",
     "target_url": "http://127.0.0.1:8080",
     "use_ai": false,
     "max_tickets": 5
@@ -26,9 +27,11 @@ Automatic output is an **unreviewed proposal**. Recorded actions are evidence of
 }
 ```
 
-This is an excerpt, not a complete upload. The original capture identity, timestamps, events, and capture consent are still required. The target must exactly match the backend's canonical configured loopback origin. The API accepts a ticket limit from one to five; the shipped UI uses five. The policy is immutable on first admission and expires 24 hours after capture Start, not after upload. Replaying an upload cannot change the policy, renew consent, or restore exhausted retries. A delayed upload after expiry is refused. Manual captures cannot be upgraded to automatic delivery by replaying their upload.
+This is an excerpt, not a complete upload. The original capture identity, timestamps, events, and capture consent are still required. The target must exactly match the selected adapter's canonical configured destination. For `ticket-service`, that is a loopback origin. For `github`, it is `https://api.github.com/repos/OWNER/REPOSITORY`; configure the credential and repository as described in [the GitHub destination guide](GITHUB_DESTINATION.md). Older uploads that omit `target_kind` continue to mean `ticket-service`; the popup requires an explicit destination choice.
 
-Generated proposals are frozen before any submission. If their count exceeds the admitted cap, the whole job blocks before delivery rather than silently dropping proposals or delivering a partial capped subset. Changing draft fields later cannot alter the frozen outbound payloads. Changing the configured destination blocks the job rather than redirecting its data.
+The API accepts a ticket limit from one to five; the shipped UI uses five. The policy is immutable on first admission and expires 24 hours after capture Start, not after upload. Replaying an upload cannot change the policy, renew consent, or restore exhausted retries. A delayed upload after expiry is refused. Manual captures cannot be upgraded to automatic delivery by replaying their upload.
+
+Generated proposals are frozen before any submission. If their count exceeds the admitted cap, the whole job blocks before delivery rather than silently dropping proposals or delivering a partial capped subset. Changing draft fields later cannot alter the frozen outbound payloads. The adapter checks the frozen preview hash again when submission begins, and the final send checkpoint rechecks admission. Changing the configured destination blocks the job rather than redirecting its data.
 
 ## Durability and failures
 
@@ -49,6 +52,8 @@ Jobs are private, atomic JSON records in `PANTHER_DATA_DIR/automation/`. The bac
 
 The backend permits four total attempts: the initial attempt and retries after 15, 60, and 300 seconds, all within the original expiry. Refused intake and payload conflicts block; uncertain network/readback results retry with the same recording, draft, and deterministic destination identity. A known destination item is read back rather than recreated. Verified receipts prevent duplicate writes. There is no paid or remote inference fallback.
 
+GitHub has an additional conservative limit: once a creation request was attempted, an inconclusive search of recent issues does not authorize another creation. The job may retry reconciliation and eventually exhaust its budget while delivery remains unconfirmed. Retain its receipt and inspect the destination; starting over with a different identity can create duplicates. GitHub serializes submissions within one backend process, which does not coordinate independent backends or copied stores.
+
 Before backend admission, the extension has a separate four-attempt upload budget: the initial explicit Stop and up to three retries after one, two, and four minutes, driven by a one-minute browser alarm. Only an already-stopped, explicitly opted-in session is eligible for automatic upload retry. Browser restart never resumes recording or silently sends an interrupted active capture. Other automatic interruptions, such as leaving the chosen origin, closing its tab, or reaching the event limit, preserve the capture and require an explicit upload action. Capture-consent withdrawal must not authorize an automatic send. Upload retries cannot extend the original policy expiry.
 
 Deleting or expiring a capture removes its job and stops remaining work. Content-free delivery receipts survive to preserve duplicate protection; deleting local files cannot undo remote tickets. Cancellation and deletion cannot roll back a network request already in flight.
@@ -57,6 +62,6 @@ Cancellation also works when an upload acknowledgment is lost or no recording ha
 
 ## Operating limits
 
-Keep Panther on until delivery completes. Use Stop & deliver for a normal session ending; Turn Panther off cancels remaining automatic delivery. The [on-demand browser helper](BROWSER_CONTROL.md) requires one-time registration, but Panther does not install a login service, start a destination service, bypass an execution hold, or grant browser permissions itself. Automatic delivery requires an explicitly configured service implementing the supported **local ticket-service protocol**; other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
+Keep Panther on until delivery completes. Use Stop & deliver for a normal session ending; Turn Panther off cancels remaining automatic delivery. The [on-demand browser helper](BROWSER_CONTROL.md) requires one-time registration, but Panther does not install a login service, start a destination service, bypass an execution hold, or grant browser permissions itself. Automatic delivery requires an explicitly configured **local ticket-service adapter or GitHub issues adapter**. Other systems can consume the versioned JSON bundle but need their own destination adapter and explicit data-sharing authorization.
 
 The loopback API's origin/header checks are not user authentication. This is a single-user local tool, not a network service. Do not expose its listener publicly.

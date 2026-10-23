@@ -29,31 +29,50 @@ const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecordin
  * page can already say anything it likes in its own error stream, so Panther
  * treats what arrives here as an observation and never as a verified defect.
  */
-export function pantherDiagnosticRelay(nonce) {
-  if (!nonce || typeof nonce !== "string") return;
-  const guard = "__pantherDiagnostic" + nonce;
-  if (globalThis[guard]) return;
-  globalThis[guard] = true;
+export function pantherDiagnosticRelay(nonce, action = "start", startedAt = 0) {
+  if (!nonce || typeof nonce !== "string" || !Number.isFinite(startedAt) || startedAt <= 0 || !["start", "stop"].includes(action)) return;
+  // This state lives in an untrusted page world. It grants no extension
+  // authority; a page can only suppress or forge its own diagnostic stream.
+  const key = "__pantherDiagnosticRelayState";
+  const previous = globalThis[key];
+  if (previous && (previous.startedAt > startedAt || (previous.startedAt === startedAt && previous.nonce !== nonce))) return;
+  if (action === "start" && previous?.nonce === nonce) return;
+  try { previous?.cleanup?.(); } catch { /* Page-owned globals are untrusted. */ }
+  const state = { nonce, startedAt, active: action === "start" };
+  globalThis[key] = state;
+  // Retain one tombstone even when Stop wins the race with installation.
+  if (!state.active) return;
   const relay = (kind, payload) => {
+    if (!state.active) return;
     try {
       document.dispatchEvent(new CustomEvent("panther-diagnostic", { detail: { nonce, kind, ...payload } }));
     } catch { /* The page changed under us; capture continues without it. */ }
   };
-  globalThis.addEventListener("error", (event) => {
+  const onError = (event) => {
     relay("uncaught_exception", {
       message: String(event.message || ""),
       source: String(event.filename || ""),
       line: Number.isInteger(event.lineno) ? event.lineno : 0,
       column: Number.isInteger(event.colno) ? event.colno : 0
     });
-  });
-  globalThis.addEventListener("unhandledrejection", (event) => {
+  };
+  const onRejection = (event) => {
     const reason = event.reason;
     relay("unhandled_rejection", {
       message: String((reason && reason.message) || reason || ""),
       source: ""
     });
-  });
+  };
+  const onStop = (event) => { if (event.detail?.nonce === nonce) state.cleanup(); };
+  state.cleanup = () => {
+    state.active = false;
+    globalThis.removeEventListener("error", onError);
+    globalThis.removeEventListener("unhandledrejection", onRejection);
+    document.removeEventListener("panther-diagnostic-stop", onStop);
+  };
+  globalThis.addEventListener("error", onError);
+  globalThis.addEventListener("unhandledrejection", onRejection);
+  document.addEventListener("panther-diagnostic-stop", onStop);
 }
 
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
@@ -418,26 +437,48 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     await ensureAlarm();
   }
 
+  async function stopPageCapture(session) {
+    // Permission loss or a closing page can make either browser API fail or
+    // stall. Cleanup is best effort and must not hold Off or upload forever.
+    let timer;
+    const cleanup = Promise.allSettled([
+      Promise.resolve().then(() => api.scripting.executeScript({
+        target: { tabId: session.tabId, frameIds: [0] }, world: "MAIN",
+        func: pantherDiagnosticRelay, args: [session.diagnosticNonce, "stop", session.startTime]
+      })),
+      tabMessage(session.tabId, { type: "extension.captureStop", sessionId: session.sessionId,
+        diagnosticNonce: session.diagnosticNonce, captureStartMs: session.startTime })
+    ]);
+    try { await Promise.race([cleanup, new Promise((resolve) => { timer = setTimeout(resolve, 250); })]); }
+    finally { clearTimeout(timer); }
+  }
+
   async function inject(session) {
-    requirePower();
-    // The page's own uncaught failures are only observable from the page's
-    // world. Install that relay first so a failure during page setup is not
-    // lost. A relay that cannot be installed only removes exception detail.
     try {
-      await api.scripting.executeScript({
-        target: { tabId: session.tabId, frameIds: [0] },
-        world: "MAIN",
-        func: pantherDiagnosticRelay,
-        args: [session.diagnosticNonce]
-      });
-    } catch { /* Exception diagnostics stay unavailable; capture continues. */ }
-    requirePower();
-    await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
-    requirePower();
-    const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId,
-      automationEnabled: !!session.automation && !session.automationWithdrawn, diagnosticNonce: session.diagnosticNonce,
-      captureStartMs: session.startTime });
-    if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
+      requirePower();
+      // The page's own uncaught failures are only observable from the page's
+      // world. Install that relay first so a failure during page setup is not
+      // lost. A relay that cannot be installed only removes exception detail.
+      try {
+        await api.scripting.executeScript({
+          target: { tabId: session.tabId, frameIds: [0] },
+          world: "MAIN",
+          func: pantherDiagnosticRelay,
+          args: [session.diagnosticNonce, "start", session.startTime]
+        });
+      } catch { /* Exception diagnostics stay unavailable; capture continues. */ }
+      requirePower();
+      await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
+      requirePower();
+      const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId,
+        automationEnabled: !!session.automation && !session.automationWithdrawn, diagnosticNonce: session.diagnosticNonce,
+        captureStartMs: session.startTime });
+      if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
+      requirePower();
+    } catch (error) {
+      await stopPageCapture(session);
+      throw error;
+    }
   }
 
   async function start(message) {
@@ -626,7 +667,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       session.endTime = now();
       session.stopReason = reason;
       await save(session);
-      await tabMessage(session.tabId, { type: "extension.captureStop", sessionId: session.sessionId });
+      await stopPageCapture(session);
       await audit("stop", { tabId: session.tabId, reason });
     }
     if (session.automation && !session.automationWithdrawn && reason !== "user") {
@@ -659,7 +700,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       session.nextUploadRetryAt = null;
       session.error = reason;
       await save(session);
-      await tabMessage(session.tabId, { type: "extension.captureStop", sessionId: session.sessionId });
+      await stopPageCapture(session);
       await badge(session);
     }
     const result = await read(RESULT_KEY);

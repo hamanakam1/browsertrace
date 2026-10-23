@@ -5,6 +5,7 @@
   let sessionId = null;
   let diagnosticNonce = "";
   let captureStartMs = 0;
+  let latestCapture = null;
   let lastUrl = "";
   let routeTimer = null;
   let statusTimer = null;
@@ -92,13 +93,15 @@
       // The click landed on something the page never marked as a control.
       if (!control && type === "click" && presentsAsInteractive(target)) payload.target.inert = true;
     }
+    const sendingSession = sessionId;
     chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload }).then((reply) => {
+      if (sessionId !== sendingSession) return;
       if (!reply?.ok) {
         stopListening();
         if (detailsText && reply?.error) detailsText.textContent = reply.error;
       }
       if (reply?.eventCount !== undefined && detailsText) detailsText.textContent = `${reply.eventCount} events · this tab only${reply.warning ? ` · ${reply.warning}` : ""}`;
-    }).catch(() => stopListening());
+    }).catch(() => { if (sessionId === sendingSession) stopListening(); });
   }
 
   function routeChanged() {
@@ -214,6 +217,10 @@
   }
 
   function stopListening() {
+    if (diagnosticNonce) {
+      try { document.dispatchEvent(new CustomEvent("panther-diagnostic-stop", { detail: { nonce: diagnosticNonce } })); }
+      catch { /* Background teardown also attempts cleanup when the page changes. */ }
+    }
     sessionId = null;
     diagnosticNonce = "";
     clearInterval(routeTimer);
@@ -247,8 +254,12 @@
   }
 
   async function refreshStatus() {
-    try { renderStatus(await chrome.runtime.sendMessage({ type: "page.getStatus" })); }
-    catch { if (statusText) statusText.textContent = "Panther · reopen extension to check status"; }
+    const requestedSession = sessionId;
+    try {
+      const state = await chrome.runtime.sendMessage({ type: "page.getStatus" });
+      if (sessionId === requestedSession) renderStatus(state);
+    }
+    catch { if (sessionId === requestedSession && statusText) statusText.textContent = "Panther · reopen extension to check status"; }
   }
 
   function showPanel() {
@@ -271,13 +282,15 @@
     stopButton = document.createElement("button");
     stopButton.type = "button"; stopButton.className = "stop"; stopButton.textContent = "Stop & generate";
     stopButton.addEventListener("click", async () => {
+      const stoppingSession = sessionId;
       stopButton.disabled = true;
       statusText.textContent = "Panther · Saving recording…";
       try {
         const response = await chrome.runtime.sendMessage({ type: "page.stop", sessionId });
+        if (sessionId !== stoppingSession) return;
         if (response?.status) renderStatus({ ...response, ok: true });
         else { statusText.textContent = "Panther · Stop needs attention"; detailsText.textContent = response?.error || "Check the extension for capture status."; }
-      } catch { statusText.textContent = "Panther · Check the extension for upload status"; }
+      } catch { if (sessionId === stoppingSession) statusText.textContent = "Panther · Check the extension for upload status"; }
     });
     reviewButton = document.createElement("button");
     reviewButton.type = "button"; reviewButton.textContent = "Review drafts"; reviewButton.hidden = true;
@@ -294,8 +307,11 @@
   }
 
   function enable(id, automationEnabled = false, nonce = "", startedAt = 0) {
-    if (sessionId === id) return;
+    if (typeof id !== "string" || !id || typeof nonce !== "string" || !nonce || !Number.isFinite(startedAt) || startedAt <= 0) return false;
+    if (sessionId === id && diagnosticNonce === nonce && captureStartMs === startedAt) return true;
+    if (latestCapture && (latestCapture.id === id || startedAt <= latestCapture.startedAt)) return false;
     stopListening();
+    latestCapture = { id, nonce, startedAt };
     sessionId = id;
     diagnosticNonce = typeof nonce === "string" ? nonce : "";
     captureStartMs = Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
@@ -308,6 +324,7 @@
     routeTimer = setInterval(routeChanged, 500);
     startDiagnostics();
     send("navigation");
+    return true;
   }
 
   for (const type of ["click", "change", "submit"]) {
@@ -320,10 +337,16 @@
   // Every event is sent immediately, with no unload-time batch or Blob message.
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message.type === "extension.captureStart") {
-      enable(message.sessionId, message.automationEnabled === true, message.diagnosticNonce, message.captureStartMs);
-      reply({ ok: true });
+      reply({ ok: enable(message.sessionId, message.automationEnabled === true, message.diagnosticNonce, message.captureStartMs) });
     } else if (message.type === "extension.captureStop") {
+      const { sessionId: id, diagnosticNonce: nonce, captureStartMs: startedAt } = message;
+      if (typeof id !== "string" || !id || typeof nonce !== "string" || !nonce || !Number.isFinite(startedAt) || startedAt <= 0 ||
+          (latestCapture && (startedAt < latestCapture.startedAt || (startedAt === latestCapture.startedAt && (id !== latestCapture.id || nonce !== latestCapture.nonce))))) {
+        reply({ ok: false, ignored: true });
+        return;
+      }
       stopListening();
+      latestCapture = { id, nonce, startedAt };
       refreshStatus();
       reply({ ok: true });
     }

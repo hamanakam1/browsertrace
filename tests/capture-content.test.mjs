@@ -28,7 +28,7 @@ class Element {
 
 function fixture() {
   const messages = [], listeners = {}, windowListeners = {}, timers = new Map(), observers = [];
-  let nextTimer = 0, onMessage;
+  let nextTimer = 0, onMessage, activeIdentity = null;
   let status = { ok: true, status: "recording", session: { eventCount: 0 } };
   const root = new Element("html");
   class FakePerformanceObserver {
@@ -44,7 +44,8 @@ function fixture() {
     performance: { timeOrigin: 1700000000000 },
     getComputedStyle: (element) => ({ cursor: element?.cursor || "" }),
     location: { href: "http://127.0.0.1:8080/#master" },
-    document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
+    document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
+      dispatchEvent: (event) => { for (const listener of listeners[event.type] || []) listener(event); } },
     window: { addEventListener: (type, fn) => { windowListeners[type] = fn; } },
     setInterval: (fn, interval) => { timers.set(++nextTimer, { fn, interval }); return nextTimer; },
     clearInterval: (id) => timers.delete(id),
@@ -60,8 +61,12 @@ function fixture() {
   vm.runInContext(script, context);
   return {
     context, root, messages, listeners, windowListeners, timers, observers,
-    start(automationEnabled = false, diagnosticNonce = "nonce-1", captureStartMs = 0) { onMessage({ type: "extension.captureStart", sessionId: "session-1", automationEnabled, diagnosticNonce, captureStartMs }, {}, () => {}); },
-    stop() { onMessage({ type: "extension.captureStop" }, {}, () => {}); },
+    command(message) { let response; onMessage(message, {}, (value) => { response = value; }); return response; },
+    start(automationEnabled = false, diagnosticNonce = "nonce-1", captureStartMs = 1700000000000, sessionId = "session-1") {
+      activeIdentity = { sessionId, diagnosticNonce, captureStartMs };
+      return this.command({ type: "extension.captureStart", ...activeIdentity, automationEnabled });
+    },
+    stop(identity = activeIdentity) { return this.command({ type: "extension.captureStop", ...identity }); },
     state(value) { status = value; },
     dispatch(type, target, path = [target], isTrusted = true) {
       for (const listener of listeners[type] || []) listener({ target, isTrusted, composedPath: () => path });
@@ -319,4 +324,53 @@ test("resource timing excludes even the millisecond immediately before consent",
   assert.equal(f.failures().length, 0);
   f.emitResource({ name: "https://app.test/during", responseStatus: 500, startTime: 1000 });
   assert.equal(f.failures().length, 1);
+});
+
+test("stale Start and Stop cannot replace the current content session or revive a stopped one", () => {
+  const f = fixture(); f.start(); f.stop();
+  assert.equal(f.start().ok, false);
+  f.start(false, "nonce-2", 1700000001000, "session-2");
+  assert.equal(f.stop({ sessionId: "session-1", diagnosticNonce: "nonce-1", captureStartMs: 1700000000000 }).ok, false);
+  assert.equal(f.start(false, "nonce-1", 1700000000000, "session-1").ok, false);
+  f.dispatch("click", new Element("button"));
+  assert.equal(f.events().at(-1).sessionId, "session-2");
+});
+
+test("content Stop requests nonce-scoped main-world teardown and fences a delayed Start", () => {
+  const f = fixture(), stops = [];
+  f.listeners["panther-diagnostic-stop"] = [(event) => stops.push(event.detail.nonce)];
+  f.start(); f.stop();
+  assert.deepEqual(stops, ["nonce-1"]);
+  const delayed = { sessionId: "session-2", diagnosticNonce: "nonce-2", captureStartMs: 1700000001000 };
+  f.stop(delayed);
+  assert.equal(f.command({ type: "extension.captureStart", ...delayed }).ok, false);
+});
+
+test("late interaction failures and status replies cannot stop a newer capture", async () => {
+  for (const channel of ["interaction", "status"]) {
+    const f = fixture();
+    const send = f.context.chrome.runtime.sendMessage;
+    let complete;
+    const delayed = new Promise((resolve) => { complete = resolve; });
+    f.context.chrome.runtime.sendMessage = (message) => {
+      if (channel === "interaction" && message.sessionId === "session-1" && message.type === "page.interaction") return delayed;
+      if (channel === "status" && message.type === "page.getStatus") return delayed;
+      return send(message);
+    };
+    f.start();
+    if (channel === "status") f.tick(1000);
+    f.stop(); f.start(false, "nonce-2", 1700000001000, "session-2");
+    complete(channel === "status" ? { ok: true, status: "ready", result: { ticketCount: 1, eventCount: 1 } } : { ok: false });
+    await new Promise((resolve) => setImmediate(resolve));
+    f.dispatch("click", new Element("button"));
+    assert.equal(f.events().at(-1).sessionId, "session-2");
+    assert.equal(f.root.children[0].shadow.children[1].children[0].textContent, "Panther · Capturing");
+  }
+});
+
+test("ambiguous equal-time capture Start is refused explicitly", () => {
+  const f = fixture(); f.start();
+  assert.equal(f.start(false, "nonce-2", 1700000000000, "session-2").ok, false);
+  f.dispatch("click", new Element("button"));
+  assert.equal(f.events().at(-1).sessionId, "session-1");
 });

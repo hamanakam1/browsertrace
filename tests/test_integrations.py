@@ -268,6 +268,25 @@ class IntegrationsTests(unittest.TestCase):
                 self.assertFalse(result["ok"])
                 self.assertEqual(self.server.state["gets"], [])
 
+    def test_refusal_excludes_destination_error_content_from_results_and_receipts(self):
+        canary = "synthetic-private-destination-error"
+        for error in (canary, {"private_detail": canary}):
+            with self.subTest(error_type=type(error).__name__):
+                self.server.state["response_override"] = {"ok": False, "error": error}
+                result = integrations.submit_ticket(self.recording, self.ticket)
+                self.assertEqual(result["state"], "refused")
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["verified"])
+                receipts = list((Path(self.temp.name) / "deliveries").glob("*.json"))
+                self.assertEqual(len(receipts), 1)
+                persisted = receipts[0].read_text()
+                self.assertNotIn(canary, json.dumps(result))
+                self.assertNotIn(canary, persisted)
+                self.assertEqual(result["error"],
+                                 "Dashboard did not return a valid ticket ID; intake may be paused or capped.")
+                self.assertEqual(json.loads(persisted)["error"], result["error"])
+        self.assertEqual(self.server.state["gets"], [])
+
     def test_readback_wrong_identity_or_missing_fence_remains_pending(self):
         self.server.state["mismatch"] = True
         first = integrations.submit_ticket(self.recording, self.ticket)

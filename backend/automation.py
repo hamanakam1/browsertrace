@@ -139,6 +139,7 @@ def _remember_cancelled_delivery(recording_id, job):
         "ticket_count", "delivered_count", "deliveries", "attempts")}
     marker["delivery"].update({key: job["policy"][key] for key in (
         "target_url", "use_ai", "max_tickets", "expires_at")})
+    marker["delivery"]["target_kind"] = job["policy"].get("target_kind") or destinations.TICKET_SERVICE
     storage.write_json(_cancellation_path(recording_id), marker)
 
 
@@ -358,7 +359,8 @@ def _refresh_receipts(job):
                 result = {"state": "conflict", "verified": False,
                           "error": "Existing delivery receipt belongs to different content"}
             else:
-                result = integrations._result(receipt, previously_verified=True)
+                kind = job["policy"].get("target_kind") or destinations.TICKET_SERVICE
+                result = destinations.receipt_result(kind, receipt, previously_verified=True)
             by_id[item["ticket"]["id"]] = _summary(item["ticket"]["id"], result)
     job["deliveries"] = list(by_id.values())
     job["delivered_count"] = sum(item["verified"] and item["state"] == "delivered" for item in job["deliveries"])

@@ -10,17 +10,18 @@ function fixture(initial, target = "http://127.0.0.1:8080") {
   const withPower = value => Object.hasOwn(value, "power") ? value : {...value, power: {state: "on", error: "", configured: true}};
   let state = withPower(initial);
   let interval;
+  let queryTabs = async () => [{ id: 7 }];
   const calls = [];
   const fetches = [];
   const responses = new Map();
   const elements = {};
-  const element = () => ({ hidden: false, disabled: false, checked: false, value: "", textContent: "", listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren() {} });
+  const element = () => ({ hidden: false, disabled: false, checked: false, value: "", textContent: "", children: [], listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren(...children) { this.children = children; } });
   const context = vm.createContext({
     BACKEND_ORIGIN: "http://127.0.0.1:7890", loadConsentLog: async () => [], Date, console, AbortSignal,
     document: { getElementById: (id) => elements[id] ||= element(), createElement: element },
     setInterval: (fn) => { interval = fn; },
     fetch: async (url) => { fetches.push(url); return { ok: true }; }, confirm: () => true,
-    chrome: { tabs: { query: async () => [{ id: 7 }] }, runtime: {
+    chrome: { tabs: { query: (...args) => queryTabs(...args) }, runtime: {
       id: "abcdefghijklmnopabcdefghijklmnop",
       sendMessage: async (message) => {
         calls.push(structuredClone(message));
@@ -38,6 +39,7 @@ function fixture(initial, target = "http://127.0.0.1:8080") {
   });
   vm.runInContext(script, context);
   return { elements, calls, fetches,
+    queryTabs(handler) { queryTabs = handler; },
     respond(type, handler) { responses.set(type, handler); },
     setState(next) { state = withPower(next); },
     state(next) { state = withPower(next); interval(); },
@@ -144,6 +146,194 @@ const policy = { enabled: true, consent: true, target_kind: "ticket-service", ta
 const automatic = (status = "queued") => ({ ok: true, enabled: true, status: "automation", session: null,
   result: { id: "rec", eventCount: 3, automationPolicy: { ...policy }, automationCheckedAt: 1700000000000,
     automation: { status, stage: "delivery", ticket_count: 2, delivered_count: 1 }, error: "" } });
+const destinations = [
+  {kind: "ticket-service", label: "Local ticket service", configured: true, available: true, url: policy.target_url},
+  {kind: "github", label: "GitHub issues", configured: true, available: true, url: "https://api.github.com/repos/example/project"},
+];
+function multipleDestinations(state, list = destinations) {
+  const f = fixture(state);
+  f.respond("extension.getAutomationTarget", () => ({ok: true, destinations: list}));
+  return f;
+}
+
+test("destination selection is locked whenever a new consented capture cannot start", async () => {
+  const retained = recording(); retained.status = "pending";
+  for (const state of [idlePower(), {...idlePower(), power: null}, recording(), retained,
+    {...idlePower("on"), status: "saving"}, {...idlePower("on"), status: "generating"}, automatic("retry_wait")]) {
+    const f = multipleDestinations(state); await flush();
+    assert.equal(f.elements.automationDestination.disabled, true, state.status + ": " + state.power?.state);
+    if (state.power === null || state.power?.state === "off") assert.equal(f.elements.turnOnBtn.disabled, false);
+    else assert.equal(f.elements.turnOffBtn.disabled, false);
+    if (state === retained) {
+      assert.equal(f.elements.retryBtn.disabled, false);
+      assert.equal(f.elements.discardBtn.disabled, false);
+    }
+  }
+});
+
+test("active policy stays selected and visible when late discovery names a changed repository", async () => {
+  const state = recording();
+  state.session.automation = {...policy, target_kind: "github", target_url: "https://api.github.com/repos/example/original"};
+  const f = fixture(state);
+  let finishDiscovery;
+  f.respond("extension.getAutomationTarget", () => new Promise(resolve => { finishDiscovery = resolve; }));
+  await flush();
+  assert.equal(f.elements.automationDestination.disabled, true);
+  assert.equal(f.elements.automationDestination.value, "github");
+  assert.match(f.elements.automationDestination.children[0].textContent, /example\/original/);
+  finishDiscovery({ok: true, destinations}); await flush();
+  assert.equal(f.elements.automationDestination.children.length, 1);
+  assert.match(f.elements.automationDestination.children[0].textContent, /example\/original/);
+  assert.match(f.elements.automationTarget.textContent, /example\/original.*fixed for this session/);
+  assert.doesNotMatch(f.elements.automationTarget.textContent, /example\/project/);
+  assert.equal(f.elements.stopBtn.disabled, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+});
+
+test("legacy active policies without a kind keep the local target even when only GitHub is configured", async () => {
+  const session = recording(); session.session.automation = {...policy}; delete session.session.automation.target_kind;
+  const delivery = automatic("queued"); delete delivery.result.automationPolicy.target_kind;
+  for (const state of [session, delivery]) {
+    const f = multipleDestinations(state, [destinations[1]]); await flush();
+    assert.equal(f.elements.automationDestination.disabled, true);
+    assert.equal(f.elements.automationDestination.value, "ticket-service");
+    assert.match(f.elements.automationDestination.children[0].textContent, /Local ticket service.*127.0.0.1:8080/);
+    assert.match(f.elements.automationTarget.textContent, /127.0.0.1:8080 \(ticket-service\).*fixed/);
+    assert.doesNotMatch(f.elements.automationTarget.textContent, /github/);
+  }
+});
+
+test("delivery receipt wording describes its recorded destination and GitHub review limits", async () => {
+  for (const status of ["queued", "delivered"]) {
+    const remote = automatic(status);
+    remote.result.automationPolicy = {...policy, target_kind: "github", target_url: destinations[1].url};
+    const github = multipleDestinations(remote, [destinations[0]]); await flush();
+    assert.match(github.elements.meta.textContent, /GitHub review labels and body text are instructions, not access controls/);
+    assert.doesNotMatch(github.elements.meta.textContent, /backlog/);
+    assert.match(github.elements.meta.textContent, /Receipts are historical/);
+    for (const kind of ["ticket-service", undefined]) {
+      const state = automatic(status); state.result.automationPolicy.target_kind = kind;
+      const local = multipleDestinations(state, [destinations[1]]); await flush();
+      assert.match(local.elements.meta.textContent, /Local backlog proposals require review/);
+      assert.doesNotMatch(local.elements.meta.textContent, /GitHub review/);
+    }
+  }
+});
+
+test("manual sessions do not describe an unconsented delivery destination as fixed", async () => {
+  const f = multipleDestinations(recording()); await flush();
+  assert.equal(f.elements.automationDestination.disabled, true);
+  assert.match(f.elements.automationTarget.textContent, /Manual capture.*automatic delivery was not enabled/);
+  assert.doesNotMatch(f.elements.automationTarget.textContent, /fixed for this session/);
+});
+
+test("choosing another destination requires fresh automation consent and sends that chosen target", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  assert.equal(f.elements.automationDestination.disabled, false);
+  f.elements.automation.checked = true; f.elements.automation.listeners.change();
+  f.elements.automationAI.checked = true;
+  f.elements.automationDestination.value = "github"; f.elements.automationDestination.listeners.change();
+  assert.equal(f.elements.automation.checked, false);
+  assert.equal(f.elements.automationAI.checked, false);
+  assert.match(f.elements.automationTarget.textContent, /example\/project/);
+  assert.match(f.elements.automationTarget.textContent, /Delivery sends summaries remotely to GitHub/);
+  assert.match(f.elements.automationTarget.textContent, /Review labels and body text are instructions, not access controls/);
+  f.elements.automation.checked = true; f.elements.automation.listeners.change();
+  await f.click("recordBtn");
+  const sent = f.calls.find(call => call.type === "extension.startRecording");
+  assert.equal(sent.automation.target_kind, "github");
+  assert.equal(sent.automation.target_url, destinations[1].url);
+});
+
+test("disabled and unconfigured destination change events cannot retarget retained evidence", async () => {
+  const state = recording(); state.session.automation = {...policy}; state.status = "pending";
+  const f = multipleDestinations(state); await flush();
+  f.elements.automationDestination.value = "github"; f.elements.automationDestination.listeners.change();
+  assert.equal(f.elements.automationDestination.value, "ticket-service");
+  assert.match(f.elements.automationTarget.textContent, /127.0.0.1:8080.*fixed/);
+  assert.equal(f.elements.retryBtn.disabled, false);
+  assert.equal(f.elements.cancelAutomationBtn.disabled, false);
+  const idle = multipleDestinations({...idlePower("on"), enabled: true}, [destinations[0], {...destinations[1], configured: false, available: false, url: ""}]);
+  await flush();
+  idle.elements.automationDestination.value = "github"; idle.elements.automationDestination.listeners.change();
+  assert.equal(idle.elements.automationDestination.value, "ticket-service");
+  assert.equal(idle.elements.recordBtn.disabled, false);
+});
+
+test("status recovery cannot carry idle automation consent to a newly configured destination", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  f.elements.automation.checked = true; f.elements.automation.listeners.change();
+  f.elements.automationAI.checked = true;
+  f.respond("extension.getStatus", () => { throw new Error("Status unavailable"); });
+  f.poll(); await flush();
+  assert.equal(f.elements.automationDestination.disabled, true);
+  f.respond("extension.getAutomationTarget", () => ({ok: true, destinations: [{...destinations[0], url: "http://127.0.0.1:9999"}]}));
+  f.respond("extension.getStatus", () => ({...idlePower("on"), enabled: true}));
+  f.poll(); await flush();
+  assert.equal(f.elements.automation.checked, false);
+  assert.equal(f.elements.automationAI.checked, false);
+  assert.match(f.elements.automationTarget.textContent, /127.0.0.1:9999/);
+  await f.click("recordBtn");
+  assert.equal(f.calls.find(call => call.type === "extension.startRecording").automation, undefined);
+});
+
+test("Start locks destination during tab lookup, deduplicates clicks, and leaves Off reachable", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  let finishTabs, queries = 0;
+  f.queryTabs(() => { ++queries; return new Promise(resolve => { finishTabs = resolve; }); });
+  f.elements.automation.checked = true; f.elements.automation.listeners.change();
+  const starting = f.elements.recordBtn.listeners.click(); await flush();
+  assert.equal(f.elements.automationDestination.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  await f.elements.recordBtn.listeners.click();
+  assert.equal(queries, 1);
+  f.elements.automationDestination.value = "github"; f.elements.automationDestination.listeners.change();
+  finishTabs([{id: 7}]); await starting;
+  assert.equal(f.calls.filter(call => call.type === "extension.startRecording").length, 1);
+  assert.equal(f.calls.find(call => call.type === "extension.startRecording").automation.target_url, policy.target_url);
+  assert.equal(f.elements.automationDestination.disabled, false);
+});
+
+test("Turn off preempts pending Start lookup without sending capture or restoring a destination", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  let finishTabs;
+  f.queryTabs(() => new Promise(resolve => { finishTabs = resolve; }));
+  const starting = f.elements.recordBtn.listeners.click(); await flush();
+  f.respond("extension.turnOff", () => { f.setState(idlePower()); return {ok: true, power: powerState("off")}; });
+  await f.click("turnOffBtn"); finishTabs([{id: 7}]); await starting;
+  assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
+  assert.equal(f.elements.automationDestination.disabled, true);
+  assert.equal(f.elements.automationDestination.children.length, 0);
+  assert.equal(f.elements.turnOnBtn.disabled, false);
+});
+
+test("failed Start lookup restores destination editing and reports the failure", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  f.queryTabs(async () => []);
+  await f.click("recordBtn");
+  assert.equal(f.elements.automationDestination.disabled, false);
+  assert.equal(f.elements.recordBtn.disabled, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  assert.match(f.elements.error.textContent, /Choose a webpage/);
+  assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
+});
+
+test("status loss invalidates pending Start even if On recovers before its tab response", async () => {
+  const f = multipleDestinations({...idlePower("on"), enabled: true}); await flush();
+  let finishTabs;
+  f.queryTabs(() => new Promise(resolve => { finishTabs = resolve; }));
+  f.elements.automation.checked = true; f.elements.automation.listeners.change();
+  const starting = f.elements.recordBtn.listeners.click(); await flush();
+  f.respond("extension.getStatus", () => { throw new Error("Status unavailable"); });
+  f.poll(); await flush();
+  f.respond("extension.getStatus", () => ({...idlePower("on"), enabled: true}));
+  f.poll(); await flush();
+  finishTabs([{id: 7}]); await starting;
+  assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
+  assert.equal(f.elements.automationDestination.disabled, false);
+  assert.equal(f.elements.automation.checked, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+});
 
 test("automatic delivery and local AI are unchecked per-session opt-ins with exact visible destination", async () => {
   const f = fixture({ ok: true, enabled: true, status: "idle", session: null, result: null });

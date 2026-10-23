@@ -14,11 +14,12 @@ body { margin: 0; }
 .helper-setup a { color: #0369a1; }
 .helper-setup code { user-select: all; overflow-wrap: anywhere; }
 .setup-needed { margin-top: 8px; font-size: 12px; color: #92400e; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #0891b2; outline-offset: 2px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #0891b2; outline-offset: 2px; }
 
 .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #ffffff; }
 .card h3 { margin: 0 0 8px 0; font-size: 13px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #4b5563; }
 .consent-row { display:flex; align-items:center; gap:10px; }
+.consent-row select { min-width: 0; flex: 1; max-width: 100%; font: inherit; }
 .note { font-size: 12px; color: #6b7280; margin: 6px 0 0 0; }
 
 .btn { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; color: #111827; font: 600 13px/1 system-ui; cursor: pointer; }

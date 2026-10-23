@@ -452,8 +452,8 @@ def submit_ticket(recording: dict, ticket: dict, *, before_send=None, expected_p
                 item = response.get("item")
                 if response.get("ok") is not True or type(item) is not int or item <= 0:
                     receipt.update(state="refused", error="Dashboard did not return a valid ticket ID; intake may be paused or capped.")
-                    if response.get("error"):
-                        receipt["error"] += " " + _text(response["error"], 180)
+                    # Destination errors may echo private proposal content or
+                    # credentials; keep durable receipts and API errors generic.
                     storage.write_json(path, receipt)
                     return _result(receipt)
                 if type(response.get("created")) is not bool:
