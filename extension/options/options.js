@@ -9,6 +9,8 @@ let selected = null;
 let recordings = [];
 let activePreview = null;
 let loading = false;
+let openingCapture = null;
+const deletingCaptures = new Set();
 let requestVersion = 0;
 let automation = null;
 let automationStale = false;
@@ -68,9 +70,17 @@ function button(label, action, className = "") {
   return node;
 }
 function syncDraftControls() {
-  const locked = !browserPowerOn || loading || (selected && automationView(automation, automationStale).locked);
+  const captureLocked = !selected || !browserPowerOn || loading || openingCapture !== null || deletingCaptures.has(selected?.id);
+  const locked = captureLocked || automationView(automation, automationStale).locked;
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
+  for (const id of ["deleteCapture", "export", "exportReplay", "exportReplayScript"]) $(id).disabled = captureLocked;
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
+}
+function captureActionAllowed(id = selected?.id) {
+  return !!id && selected?.id === id && browserPowerOn && !loading && openingCapture === null && !deletingCaptures.has(id);
+}
+function draftActionAllowed(id = selected?.id) {
+  return captureActionAllowed(id) && !automationView(automation, automationStale).locked;
 }
 function renderAutomation() {
   const view = automationView(automation, automationStale);
@@ -233,10 +243,25 @@ function renderLibrary() {
   }
 }
 async function openCapture(id) {
-  if (loading) return;
+  if (loading || deletingCaptures.has(id)) return;
   invalidatePreview();
   const version = ++requestVersion;
+  openingCapture = version;
+  syncDraftControls();
   clearTimeout(automationTimer);
+  try {
+    await loadCapture(id, version);
+  } catch (error) {
+    if (version === requestVersion) {
+      message(error.message, true);
+      if (selected) await pollAutomation(selected.id, version);
+    }
+  } finally {
+    if (openingCapture === version) openingCapture = null;
+    syncDraftControls();
+  }
+}
+async function loadCapture(id, version) {
   const [capture, evidence] = await Promise.all([api("recordings/" + id), api("recordings/" + id + "/events")]);
   if (version !== requestVersion) return;
   selected = capture;
@@ -294,16 +319,20 @@ async function openCapture(id) {
   await pollAutomation(id, version);
 }
 async function generate(useAI) {
-  if (!selected || loading || automationView(automation, automationStale).locked) return;
+  if (!draftActionAllowed()) return;
+  const id = selected.id, version = requestVersion;
+  invalidatePreview();
   loading = true;
   syncDraftControls();
   $("generationStatus").textContent = useAI ? "Generating drafts with local AI… This can take up to two minutes." : "Preparing an evidence draft from captured interactions…";
   message("Draft generation in progress.");
   try {
-    const data = await api("tickets/" + selected.id, {use_ai: useAI});
-    renderTickets(data);
+    const data = await api("tickets/" + id, {use_ai: useAI});
+    if (version !== requestVersion || selected?.id !== id) return;
+    renderTickets(data, id);
     message(data.tickets.length + " draft(s) ready for review. This generation did not submit new tickets.");
   } catch (error) {
+    if (version !== requestVersion || selected?.id !== id) return;
     $("generationStatus").textContent = "Generation failed: " + error.message + " Your capture is saved; you can retry.";
     message(error.message, true);
   } finally { loading = false; syncDraftControls(); }
@@ -338,10 +367,17 @@ function renderTickets(data, recordingId = selected.id) {
     const actions = element("div", "", "actions");
     const patch = () => ({title: fields.title.value.trim(), description: fields.description.value.trim(), acceptance_criteria: fields.acceptance_criteria.value.split("\n").map(x => x.trim()).filter(Boolean)});
     actions.append(button("Save draft edits", async () => {
-      await api("tickets/" + recordingId + "/review", {ticket_id: ticket.id, patch: patch()});
-      message("Draft edits saved locally.");
+      if (!draftActionAllowed(recordingId)) return;
+      const version = requestVersion;
+      try {
+        await api("tickets/" + recordingId + "/review", {ticket_id: ticket.id, patch: patch()});
+        if (version === requestVersion && selected?.id === recordingId) message("Draft edits saved locally.");
+      } catch (error) {
+        if (version === requestVersion && selected?.id === recordingId) message(error.message, true);
+      }
     }));
     actions.append(button("Preview ticket delivery", async () => {
+      if (!draftActionAllowed(recordingId)) return;
       const kind = deliveryKind, target = deliveryTarget;
       if (!kind || !target) throw new Error("Configure and choose a delivery destination before previewing a ticket.");
       invalidatePreview();
@@ -429,12 +465,31 @@ $("confirmSend").addEventListener("click", async () => {
   }
 });
 $("deleteCapture").addEventListener("click", async () => {
-  if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  if (!captureActionAllowed() || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  const id = selected.id, version = requestVersion;
+  deletingCaptures.add(id);
+  invalidatePreview();
+  syncDraftControls();
   try {
-    await api("recordings/" + selected.id, undefined, "DELETE");
-    ++requestVersion; clearTimeout(automationTimer); selected = null; automation = null;
-    $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
-  } catch (error) { message(error.message, true); }
+    await api("recordings/" + id, undefined, "DELETE");
+    recordings = recordings.filter(capture => capture.id !== id);
+    if (selected?.id === id) {
+      // A failed or still-pending navigation may leave the deleted capture
+      // displayed. Clear it without invalidating a newer capture load.
+      if (version === requestVersion) ++requestVersion;
+      ++automationRequest; clearTimeout(automationTimer);
+      selected = null; automation = null; renderedDraftCount = 0;
+      $("tickets").replaceChildren(); $("events").replaceChildren(); $("screenshots").replaceChildren();
+      $("captureView").hidden = true; $("emptyReview").hidden = false;
+      message("Capture and its local evidence deleted. Tickets already sent remain at their destination.");
+    }
+    renderLibrary();
+  } catch (error) {
+    if (version === requestVersion && selected?.id === id) message(error.message, true);
+  } finally {
+    deletingCaptures.delete(id);
+    syncDraftControls();
+  }
 });
 function download(name, content, type) {
   const blob = new Blob([content], {type});
@@ -442,7 +497,7 @@ function download(name, content, type) {
   link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url);
 }
 $("exportReplay").addEventListener("click", async () => {
-  if (!selected) return;
+  if (!captureActionAllowed()) return;
   const id = selected.id;
   try {
     const plan = await api("recordings/" + id + "/replay");
@@ -451,7 +506,7 @@ $("exportReplay").addEventListener("click", async () => {
   } catch (error) { message(error.message, true); }
 });
 $("exportReplayScript").addEventListener("click", async () => {
-  if (!selected) return;
+  if (!captureActionAllowed()) return;
   const id = selected.id;
   try {
     const plan = await api("recordings/" + id + "/replay?format=playwright");
@@ -460,7 +515,7 @@ $("exportReplayScript").addEventListener("click", async () => {
   } catch (error) { message(error.message, true); }
 });
 $("export").addEventListener("click", async () => {
-  if (!selected) return;
+  if (!captureActionAllowed()) return;
   const id = selected.id;
   try {
     const bundle = await api("export/" + id);

@@ -467,6 +467,38 @@ class FrictionTests(unittest.TestCase):
                     "target": {"tag": "button", "id": "save"}} for index in range(4)]
         self.assertEqual(tickets._friction(spread), [])
 
+    def test_a_later_click_burst_is_not_lost_after_an_idle_gap(self):
+        events = self.clicks(1) + self.clicks(3, start=30000)
+        draft = tickets.generate_drafts(self.recording, events)["tickets"][0]
+        self.assertEqual(draft["friction"][0]["event_indices"], [2, 3, 4])
+        self.assertIn("3 clicks", draft["friction"][0]["detail"])
+
+    def test_a_larger_later_burst_replaces_the_earlier_best_window(self):
+        events = self.clicks(3) + self.clicks(4, start=30000)
+        repeated = tickets._friction(events)
+        self.assertEqual(repeated[0]["event_indices"], [4, 5, 6, 7])
+        self.assertIn("4 clicks", repeated[0]["detail"])
+
+    def test_click_windows_use_elapsed_time_without_reordering_evidence(self):
+        for stamps, expected in (([30000, 15000, 0], []),
+                                 ([11000, 1000, 5000], [1, 2, 3]),
+                                 ([11001, 1000, 5000], [])):
+            with self.subTest(stamps=stamps):
+                events = self.clicks(3)
+                for event, stamp in zip(events, stamps):
+                    event["ts"] = stamp
+                repeated = tickets._friction(events)
+                self.assertEqual(repeated[0]["event_indices"] if repeated else [], expected)
+
+    def test_identifier_attributes_remain_part_of_the_control_identity(self):
+        for field in ("dataTab", "dataTicket"):
+            with self.subTest(field=field):
+                events = self.clicks(2)
+                other = self.clicks(2, start=2000)
+                for event in other:
+                    event["target"][field] = event["target"].pop("id")
+                self.assertEqual(tickets._friction(events + other), [])
+
     def test_a_click_on_a_non_control_is_reported(self):
         events = [{"type": "click", "ts": 1000, "url": "http://localhost:8080/page",
                    "target": {"tag": "div", "id": "tile", "inert": True}}]

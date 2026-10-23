@@ -233,6 +233,21 @@ test("markup keeps power controls sticky, named and keyboard reachable at narrow
   assert.match(html, /Disabling stops new requests; an already-running local request may finish/);
 });
 
+test("monitor document has one module entry and unique IDs for its wired controls", () => {
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(ids.filter((id, index) => ids.indexOf(id) !== index), [], "Duplicate IDs leave visible panels disconnected from monitor updates");
+  assert.equal([...html.matchAll(/<script\b[^>]*src="monitor\.js"/g)].length, 1);
+  assert.equal([...html.matchAll(/<\/html>/g)].length, 1);
+  assert.match(html, /<\/body>\s*<\/html>\s*$/);
+});
+
+test("monitor directs capture starts to the toolbar without unwired consent controls", () => {
+  for (const id of ["startBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget"]) {
+    assert.doesNotMatch(html, new RegExp(`\\bid="${id}"`), `${id} is not handled by monitor.js`);
+  }
+  assert.match(html, /To start capture, choose a webpage and open Panther from that browser’s toolbar\. Consent and Start are always explicit\./);
+});
+
 const observed = (count = 4, sessionId = "synthetic-session") => ({...capture(), session: {...capture().session, sessionId, eventCount: count}, live: {sessionId, eventCount: count, observedAt: 1700000000000, source: "rules", summary: "Selected the display settings repeatedly.", inferredIntent: "Possibly trying to change the display.", goal: "Change display settings", page: {title: "Sample settings"}, recentEvents: [{seq: count - 1, ts: 1699999999000, type: "click", label: "Selected settings"}, {seq: count, ts: 1700000000000, type: "click", label: "Selected display"}], patterns: [{title: "Repeated selection", detail: "Repeated clicks might indicate an unclear response.", evidence: [count - 1, count], hypothesis: true}]}});
 const aiAnswer = (revision = 4, sessionId = "synthetic-session") => ({ok: true, sessionId, revision, source: "local-ai", model: "synthetic-local-model", analyzedAt: 1700000001000, summary: "The user appears to be exploring display preferences.", intent: "Adjust display preferences", possibleIssue: "The settings response may be unclear.", evidence: [revision - 1, revision], confidence: "low", execution_authorized: false});
 const aiCalls = f => f.calls.filter(call => call.type === "extension.analyzeLive");
@@ -380,4 +395,49 @@ test("pending Stop disables AI opt-in while Off stays independent", async () => 
   await stopping;
   assert.equal(f.elements.understandingMode.textContent, "Historical · rules");
   assert.equal(f.elements.recentActions.children.length, 2);
+});
+
+test("a status request begun before Stop cannot revive capture or local AI after Stop succeeds", async () => {
+  const f = fixture(observed()); await flush();
+  const prior = deferred();
+  f.respond("extension.getStatus", () => prior.promise);
+  await f.advance(500);
+  f.respond("extension.stopRecording", () => ({ok: true, status: "ready", session: null, result: {id: "saved", ticketCount: 1}}));
+  await f.click("stopBtn");
+  assert.equal(f.elements.activity.textContent, "Ready");
+  prior.resolve(observed()); await flush();
+  assert.equal(f.elements.activity.textContent, "Ready");
+  assert.equal(f.elements.stopBtn.hidden, true);
+  assert.equal(f.elements.liveAiToggle.disabled, true);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+});
+
+test("an old status failure cannot invalidate a later confirmed cancellation", async () => {
+  const f = fixture(delivery()); await flush();
+  const prior = deferred();
+  f.respond("extension.getStatus", () => prior.promise);
+  await f.advance(500);
+  const cancelled = delivery(); cancelled.result.automation.status = "cancelled";
+  f.respond("extension.cancelAutomation", () => cancelled);
+  await f.click("cancelBtn");
+  assert.equal(f.elements.activity.textContent, "Cancelled");
+  prior.reject(new Error("Earlier status failed")); await flush();
+  assert.equal(f.elements.activity.textContent, "Cancelled");
+  assert.equal(f.elements.cancelBtn.hidden, true);
+  assert.doesNotMatch(f.elements.error.textContent, /Earlier status failed/);
+});
+
+test("pending session commands defer status polling without blocking Off or later recovery", async () => {
+  const f = fixture(observed()); await flush();
+  const stopping = deferred();
+  f.respond("extension.stopRecording", () => stopping.promise);
+  const pending = f.click("stopBtn"); await flush();
+  const priorCount = f.calls.filter(call => call.type === "extension.getStatus").length;
+  await f.advance(2000);
+  assert.equal(f.calls.filter(call => call.type === "extension.getStatus").length, priorCount);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  const ready = {...idle("on"), status: "ready", result: {id: "saved", ticketCount: 1}};
+  f.setState(ready); stopping.resolve(ready); await pending;
+  assert.equal(f.calls.filter(call => call.type === "extension.getStatus").length, priorCount + 1);
+  assert.equal(f.elements.activity.textContent, "Ready");
 });

@@ -153,6 +153,78 @@ class HttpTests(unittest.TestCase):
                 outgoing.assert_not_called()
                 self.assertFalse((storage.ROOT / "deliveries").exists())
 
+    def test_queued_manual_delivery_rechecks_capture_before_each_destination_write(self):
+        original_submit = destinations.submit
+        for kind, adapter in (("ticket-service", integrations), ("github", github)):
+            for removal in ("present", "delete", "expire"):
+                with self.subTest(kind=kind, removal=removal), patch.dict("os.environ", {
+                    "PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080", "PANTHER_GITHUB_REPO": "example/review",
+                }):
+                    self.capture["sessionId"] = f"queued-{kind}-{removal}"
+                    rid = self.record()
+                    code, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+                    self.assertEqual(code, 200, drafts)
+                    body = {"ticket_id": drafts["tickets"][0]["id"]}
+                    code, preview, _ = self.request(f"/api/extension/integrations/{kind}/preview/{rid}", body)
+                    self.assertEqual(code, 200, preview)
+                    entered, release = threading.Event(), threading.Event()
+                    posts = []
+
+                    def wait_before_adapter(*args, **kwargs):
+                        entered.set()
+                        if not release.wait(3):
+                            raise AssertionError("Synthetic adapter wait exceeded its bound")
+                        return original_submit(*args, **kwargs)
+
+                    def local_request(target, path, payload=None, *, before_send=None):
+                        if payload is not None:
+                            if before_send is not None:
+                                before_send()
+                            posts.append(payload)
+                            return {"ok": True, "item": 7, "created": True}
+                        return {**posts[-1], "key": "M-7", "id": 7, "native_status": "backlog"}
+
+                    def github_request(path, payload=None, *, before_send=None):
+                        if payload is not None:
+                            if before_send is not None:
+                                before_send()
+                            posts.append(payload)
+                            return {"number": 7}
+                        if "/issues?" in path:
+                            return []
+                        return {**posts[-1], "number": 7, "state": "open",
+                                "labels": [{"name": name} for name in posts[-1]["labels"]]}
+
+                    with patch.object(destinations, "submit", side_effect=wait_before_adapter), \
+                            patch.object(adapter, "_request", side_effect=local_request if kind == "ticket-service" else github_request), \
+                            concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        pending = pool.submit(self.request, f"/api/extension/integrations/{kind}/submit/{rid}", {
+                            **body, "confirmed": True, "payload_hash": preview["payload_hash"]})
+                        try:
+                            self.assertTrue(entered.wait(3))
+                            if removal == "delete":
+                                deleted_code, deleted, _ = self.request(f"/api/extension/recordings/{rid}", method="DELETE")
+                                self.assertEqual(deleted_code, 200, deleted)
+                                self.assertTrue(deleted["deleted"])
+                            elif removal == "expire":
+                                with storage.DATA_LOCK:
+                                    manifest = storage._load_manifest()
+                                    manifest[rid]["created_at"] -= storage.TTL_SECONDS + 1
+                                    storage._save_manifest(manifest)
+                        finally:
+                            release.set()
+                        code, result, _ = pending.result(timeout=5)
+                    if removal == "present":
+                        self.assertEqual(code, 200, result)
+                        self.assertTrue(result["verified"])
+                        self.assertEqual(len(posts), 1)
+                    else:
+                        self.assertEqual(posts, [], "Removed capture must not leave the machine after dispatch resumes")
+                        self.assertEqual(code, 409, result)
+                        self.assertFalse(result["verified"])
+                        self.assertEqual(result["error"], "Capture was deleted or expired before this delivery attempt; no new request was sent.")
+                        self.assertNotIn(str(storage.ROOT), json.dumps(result))
+
     def test_page_reported_failures_are_readable_and_never_verified(self):
         capture = {**self.capture, "events": [
             {"type": "click", "ts": 1700000001000, "target": {"tag": "button", "label": "Save"}},

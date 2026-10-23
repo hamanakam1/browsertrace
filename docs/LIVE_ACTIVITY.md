@@ -11,6 +11,14 @@ Panther's status window explains a consented capture as it happens. Turning Pant
 
 The projection inspects at most the last 30 stored events and displays at most 12 sanitized observations. Event numbers refer to the original capture. It does not expose typed keys, field values, arbitrary event objects, screenshot pixels, or full page text. Sanitization reduces exposure but does not guarantee that a control label, route, or user-written goal contains no private information.
 
+Button and link labels are redacted before their stored length limit is
+applied. Oversized labels are omitted as a whole. The live view also checks
+restored data again, omitting oversized text and sanitizing complete URLs
+before shortening their display; truncation must not expose part of a secret.
+URLs already at the stored 1,000-character limit are omitted from the live
+projection because it cannot tell whether the address was cut through private
+text. This also omits complete addresses exactly at that limit.
+
 ## Optional live local AI
 
 During an active capture, explicitly select **Live local AI insights** in the status window to let the configured local model interpret those bounded observations. This is independent of screenshot consent, ticket-generation AI, and automatic ticket delivery.
@@ -20,6 +28,10 @@ The option defaults off for each window/session. While enabled and visible, the 
 Only the configured loopback Ollama-compatible endpoint is used. Panther does not start or install a model service, and there is no paid or remote fallback. A missing model, slow response, malformed output, or busy local service is shown as unavailable; the observed-action feed keeps working. Local inference uses CPU/GPU resources even though no paid provider is called.
 
 Unchecking the option, hiding/closing the window, losing fresh consented capture status, stopping capture, or turning Off stops further live interpretation and ignores late responses. A request already accepted by the model service may finish its bounded computation; aborting an HTTP request does not promise immediate model cancellation. Off shuts down Panther's owned backend, not the independently running model service.
+
+A status response requested before Stop or cancellation cannot replace the
+later command result. Status polling pauses while that command is pending;
+Off stays available independently.
 
 Live insights are not draft tickets, do not mutate existing drafts, and never submit tickets or authorize work. The existing Stop → generation → optional delivery workflow remains separate. AI output is untrusted proposed interpretation, not an independently verified bug or outcome.
 

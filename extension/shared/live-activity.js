@@ -15,11 +15,19 @@ function field(value, key) {
 }
 
 function text(value, max) {
-  return typeof value === "string" ? sanitizeText(value.slice(0, 8192), max).trim() : "";
+  // Restored values may predate current capture limits. Do not cut through a
+  // recognizable secret before redaction; oversized text is omitted whole.
+  return typeof value === "string" && value.length <= 8192 ? sanitizeText(value, max).trim() : "";
 }
 
 function url(value) {
-  return typeof value === "string" ? text(sanitizeUrl(value.slice(0, 4096)), 500) : "";
+  if (typeof value !== "string") return "";
+  const sanitized = sanitizeUrl(value);
+  // The canonical sanitizer caps URLs at 1000 characters. At that boundary
+  // a final email/secret may already be incomplete; later text redaction can
+  // shrink earlier segments and expose its suffix. Conservatively omit this
+  // possibly-truncated URL, including a restored value already at the cap.
+  return sanitized.length < 1000 ? text(sanitized, 500) : "";
 }
 
 function timestamp(value) {

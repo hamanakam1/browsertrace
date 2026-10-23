@@ -187,9 +187,9 @@ function timedMessage(type, timeoutMs, payload = {}) {
 }
 
 async function poll() {
-  if (closed || polling || pendingPower) return;
+  if (closed || polling || pendingPower || operationPending) return;
   polling = true;
-  const requestEpoch = epoch;
+  const requestEpoch = epoch, requestOperation = operationEpoch;
   const request = timedMessage("extension.getStatus", STATUS_TIMEOUT_MS);
   // Keep one underlying getStatus request in flight even after a timeout.
   // Chromium messaging cannot be aborted. A late reply only releases the lock;
@@ -197,14 +197,14 @@ async function poll() {
   request.operation.then(() => { polling = false; }, () => { polling = false; });
   try {
     const response = await request.response;
-    if (closed || requestEpoch !== epoch || pendingPower) return;
+    if (closed || requestEpoch !== epoch || requestOperation !== operationEpoch || pendingPower) return;
     if (!response?.ok || !response.power) throw new Error(response?.error || "The extension did not return a confirmed runtime state.");
     snapshot = response;
     checkedAt = Date.now();
     connected = true;
     connectionError = "";
   } catch (error) {
-    if (closed || requestEpoch !== epoch || pendingPower) return;
+    if (closed || requestEpoch !== epoch || requestOperation !== operationEpoch || pendingPower) return;
     connected = false;
     connectionError = `${error.message} If status does not recover, close and reopen this window.`;
   }

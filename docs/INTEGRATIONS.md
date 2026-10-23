@@ -86,6 +86,12 @@ Version 1.2 adds the optional `diagnostics` array on a ticket, the optional `dia
 
 `friction` lists the possible-friction hypotheses derived from the recorded actions. Like a failure, a friction signal is a possibility about what happened, not a confirmed defect and not a permission to act. It always carries `hypothesis: true`.
 
+Repeated-click hypotheses group the same URL and control attributes, then use
+an elapsed-time window of at most ten seconds. Event references retain their
+original timeline indices even when timestamps arrive out of order. Saved
+drafts remain snapshots; corrections to this computation do not rewrite prior
+drafts or delivery receipts. Replay exports recompute from the captured events.
+
 There is no automatic bundle migration or importer in this release. Any future migration must preserve capture/draft identities, provenance, unresolved questions, and the distinction between observations and proposals. It must never turn `execution_authorized` on, remove review requirements, rewrite existing delivery receipts, or silently submit to another system. Keep the original artifact alongside a migrated one.
 
 Schema regressions validate real observed-mode exports and real generator/exporter output with a mocked AI response. Install the test-only `jsonschema==4.26.0` dependency to run the full validator suite; it is not needed by the backend at runtime. CI installs it explicitly. Tests report validator skips, rather than passing structural checks off as JSON Schema validation, when it is unavailable locally.
@@ -180,6 +186,12 @@ Review and preview bodies use:
 ```
 
 Manual submit repeats the reviewed body and adds `"confirmed": true` plus the exact `"payload_hash"` returned by preview. Changing the content invalidates that preview. The shipped UI handles this sequence; custom clients must preserve the same explicit review gate, or use the separately consented automatic-session contract. Automation must never be inferred from capture consent alone.
+
+Both built-in destinations perform a final capture-existence check before a
+new manual delivery request is dispatched. If a request waits in the adapter
+and the capture is deleted or expires before that check, delivery is refused.
+Deletion cannot undo requests that have already passed the dispatch check,
+earlier uncertain attempts, remote tickets, or exported files.
 
 ## Building another adapter
 

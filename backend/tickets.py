@@ -159,12 +159,13 @@ def _control_identity(event: Dict[str, Any]) -> str:
     identifiers = []
     for key in ("id", "dataTab", "dataTicket"):
         value = target.get(key)
-        if not isinstance(value, str) or not value:
+        if value is None or value == "":
+            identifiers.append("")
             continue
-        if "REDACTED" in value or "[EMAIL]" in value:
+        if not isinstance(value, str) or "REDACTED" in value or "[EMAIL]" in value:
             return ""
         identifiers.append(value)
-    if not identifiers:
+    if not any(identifiers):
         return ""
     return json.dumps([url, _text(target.get("tag"), 40), _text(target.get("role"), 40), *identifiers])
 
@@ -185,14 +186,19 @@ def _friction(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if identity:
             groups.setdefault(identity, []).append((index, event))
     for entries in groups.values():
-        timed = [(index, event.get("ts")) for index, event in entries
-                 if isinstance(event.get("ts"), (int, float)) and not isinstance(event.get("ts"), bool)
-                 and math.isfinite(event.get("ts"))]
+        timed = sorted(((index, event.get("ts")) for index, event in entries
+                        if isinstance(event.get("ts"), (int, float)) and not isinstance(event.get("ts"), bool)
+                        and math.isfinite(event.get("ts"))), key=lambda item: item[1])
         best: List[tuple] = []
-        for index, ts in timed:
-            window = [item for item in best + [(index, ts)] if ts - item[1] <= FRICTION_WINDOW_MS]
-            if len(window) > len(best):
-                best = window
+        left = 0
+        # Advance the current window independently of the best one. Event
+        # arrival order can differ from timestamp order; retain original
+        # indices so the selected evidence still points into the timeline.
+        for right, (_, ts) in enumerate(timed):
+            while ts - timed[left][1] > FRICTION_WINDOW_MS:
+                left += 1
+            if right - left + 1 > len(best):
+                best = timed[left:right + 1]
         if len(best) >= REPEATED_CLICK_THRESHOLD:
             findings.append({
                 "kind": "repeated_clicks",
@@ -200,7 +206,7 @@ def _friction(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "detail": (f"{len(best)} clicks on the same control within {FRICTION_WINDOW_MS // 1000} seconds "
                            "may indicate an unclear or unresponsive control, or intentional repetition. "
                            "No failure is verified."),
-                "event_indices": [item[0] for item in best],
+                "event_indices": sorted(item[0] for item in best),
                 "hypothesis": True,
             })
     inert = [index for index, event in enumerate(events, start=1)

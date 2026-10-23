@@ -429,7 +429,16 @@ def handle_request(handler: BaseHTTPRequestHandler):
             elif data.get("confirmed") is not True or data.get("payload_hash") != preview["payload_hash"]:
                 _json(handler, 409, {"error": "Preview and explicitly confirm this exact ticket before sending"})
             else:
-                result = destinations.submit(parts[1], entry, ticket, expected_payload_hash=preview["payload_hash"])
+                def authorize_manual_send():
+                    # Recheck after any adapter wait, immediately before POST.
+                    # A snapshot held by this request cannot outlive deletion
+                    # or retention expiry and authorize a new destination write.
+                    with storage.DATA_LOCK:
+                        if storage.get_recording(rid) is None:
+                            raise ValueError("Capture was deleted or expired before this delivery attempt; no new request was sent.")
+
+                result = destinations.submit(parts[1], entry, ticket,
+                    expected_payload_hash=preview["payload_hash"], before_send=authorize_manual_send)
                 _json(handler, 200 if result.get("ok") else 409, result)
             return
         if parts[0] == "recordings":

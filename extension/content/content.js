@@ -81,8 +81,12 @@
       const tag = semantic.tagName.toLowerCase();
       // Never inspect input values, typed keys, page body text, or editable text.
       const hasEditableContent = semantic.isContentEditable || semantic.querySelector("input,textarea,select,[contenteditable],[role=textbox]");
-      const label = ["button", "a"].includes(tag) && !hasEditableContent ?
-        (semantic.getAttribute("aria-label") || semantic.textContent || "").trim().slice(0, 120) : "";
+      const rawLabel = ["button", "a"].includes(tag) && !hasEditableContent ?
+        (semantic.getAttribute("aria-label") || semantic.textContent || "").trim() : "";
+      // Preserve recognizable email/credential shapes until background
+      // redaction applies the 120-character stored limit. Omit oversized
+      // labels rather than retaining an unrecognizable private prefix.
+      const label = rawLabel.length <= 8192 ? rawLabel : "";
       payload.target = {
         tag, role: semantic.getAttribute("role") || "", id: semantic.id || "",
         type: semantic.getAttribute("type") || "", label,

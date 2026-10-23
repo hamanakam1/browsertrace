@@ -485,3 +485,112 @@ test("deferred JSON and replay exports keep the requested capture identity after
     assert.equal(await f.downloads[0].blob.text(), typeof content === "string" ? content : JSON.stringify(content, null, 2));
   }
 });
+
+test("opening a capture locks actions until its identity and evidence are confirmed", async () => {
+  const f = fixture(); await f.ready;
+  const response = deferred();
+  f.respond("GET", "recordings/b", () => response.promise);
+  const pending = f.open("b"); await flush();
+  for (const id of ["generate", "generateAI", "deleteCapture", "export", "exportReplay", "exportReplayScript"]) {
+    assert.equal(f.get(id).disabled, true, id);
+    await f.get(id).listeners.click();
+  }
+  assert.ok(f.fields().every(field => field.disabled));
+  assert.equal(f.draftButton("Save draft edits").disabled, true);
+  assert.equal(f.draftButton("Preview ticket delivery").disabled, true);
+  assert.equal(f.calls.some(call => call.method !== "GET" || call.path.startsWith("export/") || call.path.includes("/replay")), false);
+  response.resolve(capture("b")); await pending;
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.fields()[0].value, "Review b");
+  f.respond("POST", "tickets/b", () => drafts("b"));
+  await f.get("generate").click();
+  assert.equal(f.calls.filter(call => call.path === "tickets/b" && call.method === "POST").length, 1);
+  assert.equal(f.calls.some(call => call.path === "tickets/a" && call.method === "POST"), false);
+});
+
+test("delayed deletion removes only its capture and preserves a later selection", async () => {
+  const f = fixture(); await f.ready;
+  const response = deferred();
+  f.respond("DELETE", "recordings/a", () => response.promise);
+  const pending = f.get("deleteCapture").click(); await flush();
+  assert.equal(f.get("deleteCapture").disabled, true);
+  assert.equal(f.get("generate").disabled, true);
+  await f.get("deleteCapture").listeners.click();
+  assert.equal(f.calls.filter(call => call.method === "DELETE").length, 1);
+  await f.open("b");
+  response.resolve({deleted: true}); await pending;
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.fields()[0].value, "Review b");
+  assert.equal(f.get("recordings").children.length, 1);
+  assert.match(f.get("recordings").children[0].textContent, /^Capture b/);
+  assert.equal(f.get("generate").disabled, false);
+});
+
+test("deleting the current capture clears its review and leaves another capture available", async () => {
+  const f = fixture(); await f.ready;
+  f.respond("DELETE", "recordings/a", () => ({deleted: true}));
+  await f.get("deleteCapture").click();
+  assert.equal(f.get("captureView").hidden, true);
+  assert.equal(f.get("emptyReview").hidden, false);
+  assert.equal(f.get("recordings").children.length, 1);
+  await f.open("b");
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.fields()[0].value, "Review b");
+});
+
+test("deletion clears its still-displayed capture after another capture failed to open", async () => {
+  const f = fixture(); await f.ready;
+  const deleted = deferred();
+  f.respond("DELETE", "recordings/a", () => deleted.promise);
+  const pending = f.get("deleteCapture").click(); await flush();
+  f.respond("GET", "recordings/b", () => { throw new Error("Capture b unavailable"); });
+  await f.open("b");
+  assert.equal(f.get("captureTitle").textContent, "Capture a");
+  deleted.resolve({deleted: true}); await pending;
+  assert.equal(f.get("captureView").hidden, true);
+  assert.equal(f.get("generate").disabled, true);
+  assert.equal(f.fields().length, 0);
+});
+
+test("deletion finishing during a newer capture load does not invalidate that load", async () => {
+  const f = fixture(); await f.ready;
+  const deleted = deferred(), opened = deferred();
+  f.respond("DELETE", "recordings/a", () => deleted.promise);
+  const deletion = f.get("deleteCapture").click(); await flush();
+  f.respond("GET", "recordings/b", () => opened.promise);
+  const opening = f.open("b"); await flush();
+  deleted.resolve({deleted: true}); await deletion;
+  assert.equal(f.get("captureView").hidden, true);
+  assert.equal(f.get("generate").disabled, true);
+  opened.resolve(capture("b")); await opening;
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.fields()[0].value, "Review b");
+  assert.equal(f.get("generate").disabled, false);
+});
+
+test("failed capture loading preserves prior evidence and restores its automation controls", async () => {
+  const f = fixture({initialJob: job("delivering")}); await f.ready;
+  f.respond("GET", "recordings/b", () => { throw new Error("Capture b unavailable"); });
+  await f.open("b");
+  assert.equal(f.get("captureTitle").textContent, "Capture a");
+  assert.match(f.get("message").textContent, /Capture b unavailable/);
+  assert.equal(f.get("cancelAutomation").hidden, false);
+  assert.equal(f.get("cancelAutomation").disabled, false);
+  assert.equal(f.timers.size, 1);
+});
+
+test("late save and deletion errors cannot replace another capture's status", async () => {
+  for (const operation of ["save", "delete"]) {
+    const f = fixture(); await f.ready;
+    const response = deferred();
+    f.respond(operation === "save" ? "POST" : "DELETE", operation === "save" ? "tickets/a/review" : "recordings/a", () => response.promise);
+    const pending = operation === "save" ? f.draftButton("Save draft edits").click() : f.get("deleteCapture").click();
+    await flush(); await f.open("b");
+    const before = f.get("message").textContent;
+    response.reject(new Error("Old capture request failed")); await pending;
+    assert.equal(f.get("message").textContent, before);
+    assert.equal(f.get("captureTitle").textContent, "Capture b");
+  }
+});

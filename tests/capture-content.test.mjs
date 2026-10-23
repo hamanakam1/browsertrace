@@ -147,6 +147,47 @@ test("change capture never reads input values or typed keys and ignores editable
   assert.equal(f.events().at(-1).payload.target.label, "");
 });
 
+test("control labels reach redaction intact before their persisted length limit", () => {
+  const f = fixture(); f.start();
+  for (const tag of ["button", "a"]) {
+    for (const source of ["aria-label", "textContent"]) {
+      for (const secret of ["synthetic.person@example.test", "synthetic".repeat(8)]) {
+        const control = new Element(tag);
+        const label = "Action ".repeat(15) + secret;
+        if (source === "aria-label") control.setAttribute("aria-label", label);
+        else control.textContent = label;
+        Object.defineProperty(control, "title", { get() { throw new Error("Uncaptured title was read"); } });
+        f.dispatch("click", control);
+        const clean = sanitizeCaptureEvent(f.events().at(-1).payload);
+        assert.doesNotMatch(clean.target.label, /synthetic/);
+        assert.ok(clean.target.label.length <= 120);
+        assert.match(clean.target.label, /\[(?:EMAIL|REDACTED)\]/);
+      }
+    }
+  }
+});
+
+test("oversized control labels are omitted without losing the control or reading editable text", () => {
+  const f = fixture(); f.start();
+  for (const source of ["aria-label", "textContent"]) {
+    const control = new Element("button");
+    control.id = "safe-control";
+    const label = "synthetic".repeat(1025);
+    if (source === "aria-label") control.setAttribute("aria-label", label);
+    else control.textContent = label;
+    f.dispatch("click", control);
+    const payload = f.events().at(-1).payload;
+    assert.equal(payload.target.label, "");
+    assert.equal(payload.target.id, "safe-control");
+  }
+  const editor = new Element("button");
+  editor.isContentEditable = true;
+  Object.defineProperty(editor, "textContent", { get() { throw new Error("Editable text was read"); } });
+  editor.getAttribute = () => "";
+  f.dispatch("click", editor);
+  assert.equal(f.events().at(-1).payload.target.label, "");
+});
+
 test("hash and pushState-style route changes are captured once with private query removed", () => {
   const f = fixture(); f.start();
   f.context.location.href = "http://127.0.0.1:8080/?token=secret#work-board";

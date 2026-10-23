@@ -105,9 +105,50 @@ test("projection sanitizes restored labels, title, goal, identifiers and URLs ag
   assert.equal(out.recentEvents[0].url, "https://example.test/token/REDACTED");
 });
 
+test("restored oversized text is omitted and complete URL segments are redacted before bounding", () => {
+  // These malformed/restored values exceed normal capture output bounds.
+  // Cutting first can shorten the credential prefix and reveal the secret
+  // suffix after redaction shrinks the rest of the value.
+  const oversizedText = "Bearer " + "a".repeat(8167) + " synthetic.person@example.test";
+  const rawUrl = "https://" + "u".repeat(4050) + ":p@example.test/" + "synthetic".repeat(8);
+  const input = session([], { goal: oversizedText, title: oversizedText, url: rawUrl });
+  const projected = buildLiveActivity(input);
+  const restored = sanitizeLiveActivity({ ...buildLiveActivity(session()), goal: oversizedText,
+    summary: oversizedText, inferredIntent: oversizedText, page: { title: oversizedText, url: rawUrl } });
+  for (const value of [projected, restored]) {
+    assert.ok(value);
+    assert.equal(value.goal, "");
+    assert.equal(value.page.title, "");
+    assert.equal(value.page.url, "https://example.test/REDACTED");
+    assert.doesNotMatch(JSON.stringify(value), /synthetic/);
+  }
+  assert.equal(restored.summary, "");
+  assert.equal(restored.inferredIntent, "");
+  assert.equal(buildLiveActivity(session([], { url: rawUrl + "x".repeat(8192) })).page.url, "");
+});
+
 test("URL output additionally removes email addresses in path segments", () => {
   const out = buildLiveActivity(session([event("navigation", 1000, {}, "https://example.test/people/alice@example.test")]));
   assert.doesNotMatch(JSON.stringify(out), /alice@example/);
+});
+
+test("possibly truncated URLs are omitted before live text scrubbing can expose a private suffix", () => {
+  const rawUrl = "https://example.test/" + "alice.longname@example.test/".repeat(34) + "padding/" + "synthetic.person@example.test";
+  assert.equal(rawUrl.length, 1010);
+  // Include an already-truncated restored value: its original length is no
+  // longer available, so an exact sanitizer-cap length is ambiguous too.
+  for (const value of [rawUrl, rawUrl.slice(0, 1000)]) {
+    const projected = buildLiveActivity(session([event("navigation", 1000, {}, value)], { url: value }));
+    const cached = buildLiveActivity(session([event("navigation")]));
+    cached.page.url = value;
+    cached.recentEvents[0].url = value;
+    const restored = sanitizeLiveActivity(cached);
+    for (const result of [projected, restored]) {
+      assert.equal(result.page.url, "");
+      assert.equal(result.recentEvents[0].url, "");
+      assert.doesNotMatch(JSON.stringify(result), /synthetic|alice/);
+    }
+  }
 });
 
 test("non-web URL schemes and malformed URLs are not exposed", () => {
