@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
+- Interrupted uploads can finish registration by reusing exactly matching prepared artifacts. Conflicting, partial, missing, or symlinked evidence is refused without overwriting it; missing event timestamps use a stable capture-start fallback across retries.
+- Replay exports preserve a submit following a click as a review step instead of submitting the form twice. Native buttons use their implicit role for captured accessible names, and name/text locators match exactly.
 - GitHub marker lookup now scans up to five pages within a shared time budget, recovering older issues and allowing creation after a complete scan beyond the first 100 entries. Incomplete or malformed scans still block creation.
 - Replay plans count actionable steps instead of diagnostics toward their limit, disclose omitted steps in both JSON and script exports, and skip selectors containing redaction placeholders.
 - The backend now redacts session identifiers in URL path segments and fragments, matching the extension. A client posting directly to the backend could previously store a session identifier that the extension would have removed.
@@ -28,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A draft's evidence sentence now states the scope it was drawn from. A truncated session used to report "300 recorded events" when more had been recorded; the fact was only in the machine-readable provenance.
 
 ### Security
+- Ticket-service refusals retain a fixed local diagnostic instead of copying arbitrary destination error strings or objects into results and durable receipts.
 - Capture titles and goals are redacted before backend persistence, protecting direct uploads as well as extension uploads across the library, drafts, and exports.
 - Replay exports quote captured links as complete Python literals and keep capture identifiers inside the header comment, preventing page-controlled text from introducing statements into a generated script.
 - GitHub delivery serializes creation, retries known issue numbers directly, and records creation attempts before sending. Uncertain attempts and incomplete marker scans block further creation instead of risking duplicates.

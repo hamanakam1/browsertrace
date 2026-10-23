@@ -171,6 +171,20 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 
 POST and DELETE requests require an `X-Panther-Client` header. JSON POST requests use `Content-Type: application/json`. Browser requests must come from a permitted extension origin or the backend's loopback origin; unrelated website origins are refused. This header is not a secret or authentication token. The API is intended for a single-user local environment.
 
+Capture uploads retain a stable session identity across retries. If a manifest
+write fails after evidence files were prepared, an identical retry can reuse
+those files and finish registration. Existing files must be regular files with
+exactly matching bytes; conflicts, partial files, symlinks, or a retry that
+omits a previously prepared video are refused without replacing the evidence.
+Conflicting orphan files remain for manual review; this is not an automatic
+cleanup or retention mechanism for incomplete uploads.
+
+Clients should supply event timestamps in epoch milliseconds. A missing or
+unusable event timestamp in an upload defaults to the validated capture start,
+so normalization is stable across retries. This fallback approximates timing;
+it does not establish when the event occurred. Supplied usable timestamps are
+preserved.
+
 Review and preview bodies use:
 
 ```json

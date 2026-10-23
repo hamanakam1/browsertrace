@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -61,7 +62,7 @@ class HttpTests(unittest.TestCase):
 
     def request(self, path, body=None, method=None, headers=None):
         req = urllib.request.Request(self.origin + path,
-            data=json.dumps(body).encode() if body is not None else None,
+            data=body if isinstance(body, bytes) else json.dumps(body).encode() if body is not None else None,
             method=method or ("POST" if body is not None else "GET"),
             headers={"Content-Type": "application/json", "X-Panther-Client": "test", **(headers or {})})
         try:
@@ -77,6 +78,18 @@ class HttpTests(unittest.TestCase):
         code, data, _ = self.request("/api/extension/record", self.capture)
         self.assertEqual(code, 201, data)
         return data["id"]
+
+    def multipart_record(self, video, capture=None):
+        chunks = []
+        for key, value in (capture or self.capture).items():
+            text = value if isinstance(value, str) else json.dumps(value)
+            chunks.append(f'--synthetic-upload\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{text}\r\n'.encode())
+        chunks.extend([
+            b'--synthetic-upload\r\nContent-Disposition: form-data; name="video"; filename="capture.webm"\r\nContent-Type: video/webm\r\n\r\n',
+            video, b'\r\n--synthetic-upload--\r\n',
+        ])
+        return self.request("/api/extension/record", b"".join(chunks),
+                            headers={"Content-Type": "multipart/form-data; boundary=synthetic-upload"})
 
     def test_capture_draft_edit_export_flow(self):
         rid = self.record()
@@ -202,6 +215,132 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(len({data["id"] for _, data, _ in results}), 1)
         self.assertEqual(sorted(code for code, _, _ in results), [200, 200, 200, 201])
         self.assertEqual(len(storage.list_recordings()), 1)
+
+    def test_identical_multipart_retry_recovers_after_manifest_save_failure(self):
+        self.capture.update(screenshotsConsent=True, screenshots=[{
+            "ts": 1700000001000, "dataUrl": "data:image/jpeg;base64,/9j/2Q==",
+        }])
+        video = b"synthetic-video-evidence \t\r\n"
+        with patch.object(storage, "_save_manifest", side_effect=OSError("synthetic disk failure")):
+            code, _, _ = self.multipart_record(video)
+        self.assertEqual(code, 500)
+        self.assertEqual(storage.list_recordings(), [])
+        artifacts = {path: path.read_bytes() for directory in (storage.RECORDINGS_DIR, storage.EVENTS_DIR)
+                     for path in directory.iterdir()}
+        self.assertEqual(len(artifacts), 3)
+
+        code, result, _ = self.multipart_record(video)
+        self.assertEqual(code, 201, result)
+        self.assertEqual(len(storage.list_recordings()), 1)
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+        self.assertTrue(all(path.stat().st_mode & 0o077 == 0 for path in artifacts))
+        self.assertEqual(storage.get_recording(result["id"])["video_size"], len(video))
+
+    def test_interrupted_upload_reuses_timestamp_fallback_after_clock_advances(self):
+        invalid_timestamps = (None, True, "unknown", float("nan"), float("inf"), float("-inf"))
+        self.capture["events"] = [{"type": "click", "target": {"tag": "button", "id": "missing"}}]
+        self.capture["events"] += [
+            {"type": "click", "ts": value, "target": {"tag": "button", "id": f"invalid-{index}"}}
+            for index, value in enumerate(invalid_timestamps)
+        ]
+        provided = (self.capture["startTime"] + 1234, self.capture["startTime"] + 2345.75, 0, -100)
+        self.capture["events"] += [{"type": "click", "ts": value} for value in provided]
+        video = b"synthetic-retry-video"
+        clock = time.time()
+        with patch("redaction.time.time", return_value=clock), \
+                patch.object(storage, "_save_manifest", side_effect=OSError("synthetic disk failure")):
+            self.assertEqual(self.multipart_record(video)[0], 500)
+        artifacts = {path: path.read_bytes() for directory in (storage.RECORDINGS_DIR, storage.EVENTS_DIR)
+                     for path in directory.iterdir()}
+        with patch("redaction.time.time", return_value=clock + 120):
+            code, result, _ = self.multipart_record(video)
+        self.assertEqual(code, 201, result)
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+        events = json.loads(Path(storage.get_recording(result["id"])["events_path"]).read_text())
+        fallback_count = len(invalid_timestamps) + 1
+        self.assertEqual([event["ts"] for event in events[:fallback_count]],
+                         [self.capture["startTime"]] * fallback_count)
+        # Preserve the shared sanitizer's existing integer conversion, including
+        # finite zero/negative timestamps; only unusable inputs receive fallback.
+        self.assertEqual([event["ts"] for event in events[fallback_count:]],
+                         [int(value) for value in provided])
+
+    def test_conflicting_multipart_retry_preserves_unregistered_video(self):
+        video = b"synthetic-original-video"
+        with patch.object(storage, "_save_manifest", side_effect=OSError("synthetic disk failure")):
+            self.assertEqual(self.multipart_record(video)[0], 500)
+        artifacts = {path: path.read_bytes() for directory in (storage.RECORDINGS_DIR, storage.EVENTS_DIR)
+                     for path in directory.iterdir()}
+        code, result, _ = self.multipart_record(b"synthetic-different-video")
+        self.assertEqual(code, 400, result)
+        self.assertEqual(storage.list_recordings(), [])
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+        code, result, _ = self.request("/api/extension/record", self.capture)
+        self.assertEqual(code, 400, result)
+        self.assertEqual(storage.list_recordings(), [])
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+        self.assertEqual(self.multipart_record(video)[0], 201)
+
+    def test_partial_or_symlink_video_artifacts_are_refused_without_changes(self):
+        storage.ensure_dirs()
+        video = b"synthetic-complete-video"
+        for kind in ("partial", "symlink", "directory"):
+            with self.subTest(kind=kind):
+                capture = {**self.capture, "sessionId": f"synthetic-{kind}"}
+                rid = storage.recording_id_for_session(capture["extensionId"], capture["sessionId"])
+                path = storage.RECORDINGS_DIR / f"{rid}.webm"
+                target = storage.ROOT / f"synthetic-{kind}-target"
+                if kind == "partial":
+                    path.write_bytes(video[:8])
+                elif kind == "symlink":
+                    target.write_bytes(video)
+                    path.symlink_to(target)
+                else:
+                    path.mkdir()
+                code, result, _ = self.multipart_record(video, capture)
+                self.assertEqual(code, 400, result)
+                self.assertIsNone(storage.get_recording(rid))
+                if kind == "partial":
+                    self.assertEqual(path.read_bytes(), video[:8])
+                elif kind == "symlink":
+                    self.assertTrue(path.is_symlink())
+                    self.assertEqual(target.read_bytes(), video)
+                else:
+                    self.assertTrue(path.is_dir())
+
+    def test_conflicting_orphan_events_or_screenshots_are_never_replaced(self):
+        self.capture.update(screenshotsConsent=True, screenshots=[{
+            "ts": 1700000001000, "dataUrl": "data:image/jpeg;base64,/9j/2Q==",
+        }])
+        with patch.object(storage, "_save_manifest", side_effect=OSError("synthetic disk failure")):
+            self.assertEqual(self.request("/api/extension/record", self.capture)[0], 500)
+        artifacts = {path: path.read_bytes() for directory in (storage.RECORDINGS_DIR, storage.EVENTS_DIR)
+                     for path in directory.iterdir()}
+        variants = (
+            {**self.capture, "events": [{"type": "click", "ts": 1700000001000,
+                                       "target": {"tag": "button", "id": "different"}}]},
+            {**self.capture, "screenshots": [{"ts": 1700000002000,
+                                             "dataUrl": "data:image/jpeg;base64,/9j/2Q=="}]},
+        )
+        for capture in variants:
+            with self.subTest(changed="events" if capture["events"] != self.capture["events"] else "screenshots"):
+                code, result, _ = self.request("/api/extension/record", capture)
+                self.assertEqual(code, 400, result)
+                self.assertEqual(storage.list_recordings(), [])
+                self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+
+    def test_registered_multipart_capture_keeps_idempotent_early_return(self):
+        code, first, _ = self.multipart_record(b"synthetic-original-video")
+        self.assertEqual(code, 201, first)
+        before = storage.get_recording(first["id"])
+        artifacts = {Path(before[key]): Path(before[key]).read_bytes()
+                     for key in ("video_path", "events_path", "screenshots_path")}
+        code, second, _ = self.multipart_record(b"synthetic-different-video")
+        self.assertEqual(code, 200, second)
+        self.assertTrue(second["cached"])
+        self.assertEqual(second["id"], first["id"])
+        self.assertEqual(storage.get_recording(first["id"]), before)
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
 
     def test_health_advertises_the_capabilities_and_the_export_contract_version(self):
         code, health, _ = self.request("/api/extension/health")

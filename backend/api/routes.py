@@ -5,6 +5,8 @@ import base64
 import json
 import math
 import mimetypes
+import os
+import stat
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler
@@ -169,6 +171,37 @@ def _public_record(entry):
     return {key: value for key, value in entry.items() if not key.endswith("_path") and key != "inference"}
 
 
+def _prepare_capture_artifact(path: Path, content: bytes):
+    """Create capture evidence, or reuse exactly matching unregistered evidence.
+
+    A failed manifest commit leaves prepared files behind. A retry may finish
+    that commit, but must never replace a different or partially written file.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        try:
+            # Refuse symlinks and inspect the opened descriptor. Nonblocking
+            # mode also prevents a pre-existing FIFO from hanging the upload.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as existing:
+                info = os.fstat(existing.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_size != len(content)
+                        or existing.read(len(content) + 1) != content):
+                    raise ValueError("Existing capture evidence differs from this upload; it was preserved for review")
+                current = path.lstat()
+                if (not stat.S_ISREG(current.st_mode)
+                        or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)):
+                    raise ValueError("Existing capture evidence changed during verification; it was preserved for review")
+        except OSError:
+            raise ValueError("Existing capture evidence cannot be reused; it was preserved for review") from None
+        return
+    with os.fdopen(fd, "wb") as output:
+        output.write(content)
+        output.flush()
+        os.fsync(output.fileno())
+
+
 def _record(handler):
     video = b""
     if handler.headers.get_content_type() == "multipart/form-data":
@@ -184,11 +217,29 @@ def _record(handler):
         data = _body_json(handler)
     if data.get("consent") is not True:
         raise ValueError("Explicit session consent is required")
+    try:
+        start_ms = float(data["startTime"])
+        start = start_ms / 1000
+        end = float(data["endTime"]) / 1000
+        tab = int(data.get("tabId", 0))
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("Expected startTime/endTime in epoch milliseconds and numeric tabId") from None
+    if not math.isfinite(start) or not math.isfinite(end) or start <= 0 or end < start:
+        raise ValueError("Invalid capture timestamps")
     events = data.get("events", [])
     screenshots = data.get("screenshots", [])
     if not isinstance(events, list) or len(events) > 5000 or any(not isinstance(e, dict) for e in events):
         raise ValueError("Expected at most 5000 event objects")
-    events = sanitize_events(events)
+    prepared_events = []
+    for event in events:
+        timestamp = event.get("ts")
+        if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
+                or not math.isfinite(timestamp)):
+            # The capture start is a repeatable approximation, not an observed
+            # event time. Wall-clock fallback would change an identical retry.
+            event = {**event, "ts": int(start_ms)}
+        prepared_events.append(event)
+    events = sanitize_events(prepared_events)
     if not isinstance(screenshots, list) or len(screenshots) > 20:
         raise ValueError("Expected at most 20 screenshots")
     if screenshots and data.get("screenshotsConsent") is not True:
@@ -217,14 +268,6 @@ def _record(handler):
     extension_id = _text(data.get("extensionId", "unknown"), 200)
     if not session_id:
         raise ValueError("sessionId is required for retry-safe capture")
-    try:
-        start = float(data["startTime"]) / 1000
-        end = float(data["endTime"]) / 1000
-        tab = int(data.get("tabId", 0))
-    except (ValueError, TypeError, KeyError):
-        raise ValueError("Expected startTime/endTime in epoch milliseconds and numeric tabId") from None
-    if not math.isfinite(start) or not math.isfinite(end) or start <= 0 or end < start:
-        raise ValueError("Invalid capture timestamps")
     url = _safe_url(data.get("url", ""))
     title = _text(data.get("title", ""), 500)
     goal = _text(data.get("goal", ""), 2000)
@@ -244,15 +287,16 @@ def _record(handler):
             _json(handler, 200, {"id": rid, "event_count": existing["event_count"], "cached": True, "automation": state})
             return
         storage.ensure_dirs()
-        video_path = storage.RECORDINGS_DIR / f"{rid}.webm" if video else None
+        prepared_video = storage.RECORDINGS_DIR / f"{rid}.webm"
+        video_path = prepared_video if video else None
         if video_path:
-            with open(video_path, "xb") as output:
-                output.write(video)
-            video_path.chmod(0o600)
+            _prepare_capture_artifact(video_path, video)
+        elif os.path.lexists(prepared_video):
+            raise ValueError("Existing capture video is missing from this retry; it was preserved for review")
         events_path = storage.EVENTS_DIR / f"{rid}.json"
         shots_path = storage.RECORDINGS_DIR / f"{rid}_screenshots.json"
-        storage.write_json(events_path, events)
-        storage.write_json(shots_path, screenshots)
+        _prepare_capture_artifact(events_path, json.dumps(events, indent=2, allow_nan=False).encode())
+        _prepare_capture_artifact(shots_path, json.dumps(screenshots, indent=2, allow_nan=False).encode())
         storage.create_recording(
             recording_id=rid, session_id=session_id, tab_id=tab, start_time=start, end_time=end,
             event_count=len(events), screenshot_count=len(screenshots), extension_id=extension_id,
